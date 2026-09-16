@@ -1,11 +1,12 @@
 # 下载、构建与安装
 
-**cockpit-file 0.1.0** 需要包含 Module API v1 的 **Cockpit 0.2.0** 源码或对应运行包；
+**cockpit-file 0.1.1 开发版本** 需要固定 **Cockpit 0.2.0** 源码或对应运行包；
 不能对已发布的 Cockpit v0.1.0 直接执行模块命令。
 
-宿主实现已通过 [waksana/cockpit#4](https://github.com/waksana/cockpit/pull/4) 和
-[waksana/cockpit#6](https://github.com/waksana/cockpit/pull/6) 合入，
+本次输入区配套调整位于 [waksana/cockpit#7](https://github.com/waksana/cockpit/pull/7)，
 当前固定提交记录在 [`tooling/host-sdk.json`](../tooling/host-sdk.json)。
+0.1.1 尚未发布，不能直接配合缺少 rendersDraftAttachments 声明支持的旧宿主；
+已发布的 0.1.0 使用对应 tag 的文档和构建基线。
 
 普通安装从 [GitHub Releases](https://github.com/waksana/cockpit-file/releases)
 下载同一版本的 `cockpit-file-X.Y.Z.tgz` 和 `.tgz.sha256`，
@@ -50,8 +51,8 @@ pnpm package
 默认输出：
 
 ```text
-module-output/cockpit-file-0.1.0.tgz
-module-output/cockpit-file-0.1.0.tgz.sha256
+module-output/cockpit-file-0.1.1.tgz
+module-output/cockpit-file-0.1.1.tgz.sha256
 ```
 
 输出目录必须不存在，也可以 `pnpm package /absolute/new/output` 指定新目录。
@@ -67,7 +68,7 @@ module-output/cockpit-file-0.1.0.tgz.sha256
 ```sh
 node --import ./apps/server/node_modules/tsx/dist/loader.mjs \
   apps/server/src/module-cli.ts install \
-  /absolute/path/cockpit-file-0.1.0.tgz --trust-local-code --enable
+  /absolute/path/cockpit-file-0.1.1.tgz --trust-local-code --enable
 ```
 
 该确认表示信任本地代码，不是密码、签名验证或安全沙箱。
@@ -165,12 +166,17 @@ node --import ./apps/server/node_modules/tsx/dist/loader.mjs \
 | 接口 | 用途 |
 | --- | --- |
 | POST /upload?name=…&operationId=… | application/octet-stream 上传；可带 x-file-mime 提示，实际类型由字节判断 |
+| DELETE /uploads/:operationId | 明确丢弃独立上传；成功/重复成功 204，后续同操作上传 410，文件读取 404 |
 | GET/HEAD /files/<fileId>/<bodyName> | 托管原件；bodyName 必须与实际原件一致 |
 | GET/HEAD /messages/<encodedReference> | 按原生 session/message/引用绑定查找快照 |
 
 变更请求必须携带宿主提供的 `x-cockpit-module-digest`；前端公共 request 自动添加。
 媒体 GET/HEAD 依靠 URL 内的版本，可不带自定义 header。
 `?download=1` 强制作为附件下载。部分内容请求支持标准单段 Range。
+
+界面只对本页发起、尚未交给原生发送的上传在移除时尝试删除；发送过或从草稿恢复的附件保留原件。
+这不是自动引用计数或文件库回收。删除不阻塞界面，失败会明确反馈；
+未知外部操作占用返回 409，不自动接管，不能把浏览器缓存仍能显示当作服务器删除失败。
 
 HEAD ready 返回 200 和类型/长度；已知工作进行中返回 202；
 没有记录返回 404，前端在可能的事件先后差异下最多等待五秒。

@@ -58,7 +58,7 @@ function errorResponse(error: unknown): ModuleResponse {
   const status = ({
     INVALID_INPUT: 400, INVALID_SOURCE: 422, LIMIT_EXCEEDED: 413,
     CONFLICT: 409, PENDING: 202, BUSY: 503, CLOSED: 503, ABORTED: 409,
-    SOURCE_NOT_FOUND: 404, NOT_FOUND: 404, SOURCE_UNREADABLE: 403,
+    SOURCE_NOT_FOUND: 404, NOT_FOUND: 404, SOURCE_UNREADABLE: 403, DISCARDED: 410, ACTIVITY_UNKNOWN: 409,
   } as Record<string, number>)[error.code] ?? 500;
   return { status, headers: { 'Cache-Control': 'no-store' },
     body: { code: error.code, error: error.message, ...(error.fileId ? { fileId: error.fileId } : {}),
@@ -254,6 +254,16 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
     },
     dispose,
     routes: [
+      { method: 'DELETE', path: '/uploads/:operationId',
+        handler: async request => {
+          try {
+            await storage.discardUpload(request.params.operationId!);
+            return { status: 204, headers: { 'Cache-Control': 'no-store' } };
+          } catch (error) {
+            if (request.signal.aborted) report(error);
+            return errorResponse(error);
+          }
+        } },
       { method: 'POST', path: '/upload', body: 'stream', bodyLimit: maxBytes,
         handler: async request => {
           if (!binary(request.body)) return { status: 400, body: { error: 'Binary file body required', code: 'INVALID_INPUT' } };

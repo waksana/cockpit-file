@@ -14,6 +14,8 @@ export interface UploadItem {
   readonly size: number;
   readonly status: UploadStatus;
   readonly error?: string;
+  readonly file?: File;
+  readonly url?: string;
 }
 
 export interface UploadSnapshot {
@@ -35,6 +37,8 @@ interface UploadScope {
   snapshot: UploadSnapshot;
   release?: () => void;
   error?: string;
+  owned: Map<string, { operationId: string; value?: DraftAttachment['value']; attached?: boolean }>;
+  unsubscribe?: () => void;
 }
 
 interface UploadOptions {
@@ -107,7 +111,7 @@ export class UploadStore {
   private scope(sessionId: string): UploadScope {
     let scope = this.scopes.get(sessionId);
     if (!scope) {
-      scope = { entries: [], listeners: new Set(), snapshot: { items: [] } };
+      scope = { entries: [], listeners: new Set(), snapshot: { items: [] }, owned: new Map() };
       this.scopes.set(sessionId, scope);
     }
     return scope;
@@ -126,8 +130,12 @@ export class UploadStore {
 
   private bind(draft: ModuleDraft): UploadScope {
     const scope = this.scope(draft.sessionId);
-    if (scope.draft) this.prune(scope, scope.draft.getSnapshot().attachments);
-    if (!scope.draft || scope.entries.length === 0) scope.draft = draft;
+    if (scope.draft) this.observe(scope);
+    if (!scope.draft || (scope.entries.length === 0 && scope.owned.size === 0)) {
+      scope.unsubscribe?.();
+      scope.unsubscribe = undefined;
+      scope.draft = draft;
+    }
     if (scope.entries.length && !scope.release) scope.release = scope.draft.block('请等待文件上传完成，或移除未完成的附件');
     if (!scope.entries.length && scope.release) {
       const release = scope.release;
@@ -135,6 +143,27 @@ export class UploadStore {
       release();
     }
     return scope;
+  }
+
+  private observe(scope: UploadScope): void {
+    const snapshot = scope.draft!.getSnapshot();
+    // Native pending is synchronous, but its outcome need not be confirmed. Once
+    // exposed to a submission, an operation never becomes discardable again.
+    if (snapshot.pending) scope.owned.clear();
+    const present = new Map(snapshot.attachments.map(item => [item.id, item.value]));
+    for (const [id, owned] of scope.owned) {
+      const value = present.get(id);
+      if (owned.attached && (!value || value.type !== 'file' || owned.value?.type !== 'file' ||
+          value.path !== owned.value.path)) scope.owned.delete(id);
+    }
+    this.prune(scope, snapshot.attachments);
+    this.unwatchIdle(scope);
+  }
+
+  private unwatchIdle(scope: UploadScope): void {
+    if (scope.entries.length || scope.owned.size) return;
+    scope.unsubscribe?.();
+    scope.unsubscribe = undefined;
   }
 
   receive(files: readonly File[], context: ComposerContext): void {
@@ -162,6 +191,11 @@ export class UploadStore {
     // This guard belongs to the captured draft, not the currently mounted view.
     scope.release ??= scope.draft!.block('请等待文件上传完成，或移除未完成的附件');
     scope.entries.push(...entries);
+    if (!scope.draft!.getSnapshot().pending) {
+      for (const entry of entries) scope.owned.set(`cf-upload:${entry.id}`, { operationId: entry.id });
+    }
+    // Independent of React subscriptions: switching sessions must not miss a send.
+    scope.unsubscribe ??= scope.draft!.subscribe(() => this.observe(scope));
     scope.error = undefined;
     this.publish(scope);
     for (const entry of entries) void this.upload(scope, entry);
@@ -188,10 +222,43 @@ export class UploadStore {
     const scope = this.bind(draft);
     const entry = scope.entries.find(item => item.id === id && !item.attached);
     if (!entry) return;
+    const owned = scope.owned.get(`cf-upload:${id}`);
+    scope.owned.delete(`cf-upload:${id}`);
     scope.entries = scope.entries.filter(item => item !== entry);
     entry.controller?.abort();
+    entry.file = undefined;
     this.flush(scope);
     this.publish(scope);
+    if (owned) void this.discard(owned.operationId);
+  }
+
+  removeAttachment(draft: ModuleDraft, id: string): void {
+    if (this.disposed) return;
+    const scope = this.bind(draft);
+    const snapshot = draft.getSnapshot();
+    const owned = scope.draft === draft && !snapshot.pending ? scope.owned.get(id) : undefined;
+    try {
+      draft.removeAttachment(id);
+    } catch (error) {
+      this.options.report(error);
+      return;
+    }
+    if (scope.draft === draft) {
+      scope.owned.delete(id);
+      this.observe(scope);
+    }
+    if (owned?.attached) void this.discard(owned.operationId);
+  }
+
+  private async discard(operationId: string): Promise<void> {
+    try {
+      const response = await this.options.request(`/uploads/${encodeURIComponent(operationId)}`, {
+        method: 'DELETE', signal: AbortSignal.timeout(5_000), keepalive: true,
+      });
+      if (response.status !== 204) throw new Error(`Could not discard upload (HTTP ${response.status}).`);
+    } catch (error) {
+      this.options.report(error);
+    }
   }
 
   private reject(scope: UploadScope, error: string): void {
@@ -225,13 +292,17 @@ export class UploadStore {
       const value: unknown = JSON.parse(await readBounded(response, 65_536));
       const result = this.attachment(value, entry);
       if (this.disposed || controller.signal.aborted || !scope.entries.includes(entry)) return;
-      this.replace(scope, entry, { ...entry, file: undefined, controller: undefined, result, status: 'ready' });
+      entry.file = undefined;
+      const owned = scope.owned.get(result.id);
+      if (owned) owned.value = result.value;
+      const url = result.value.type === 'file'
+        ? nativeFileUrl(result.value.path, this.options.nativePathPrefix, this.options.apiBase)! : undefined;
+      this.replace(scope, entry, { ...entry, controller: undefined, result, url, status: 'ready' });
       this.flush(scope);
       this.publish(scope);
     } catch (error) {
       if (this.disposed || controller.signal.aborted || !scope.entries.includes(entry)) return;
       this.replace(scope, entry, { ...entry, controller: undefined, status: 'failed', error: message(error) });
-      this.options.report(error);
       this.publish(scope);
     }
   }
@@ -285,25 +356,31 @@ export class UploadStore {
         if (this.disposed) return;
         const detail = `Could not add uploaded files to the draft: ${message(error)}`;
         for (const entry of ready) this.replace(scope, entry, { ...entry, status: 'failed', error: detail });
-        this.options.report(error);
         return;
       }
       if (this.disposed) return;
-      for (const entry of ready) this.replace(scope, entry, { ...entry, attached: true });
-      this.prune(scope, scope.draft!.getSnapshot().attachments);
+      for (const entry of ready) {
+        this.replace(scope, entry, { ...entry, attached: true });
+        const owned = scope.owned.get(entry.result!.id);
+        if (owned) owned.attached = true;
+      }
+      this.observe(scope);
     }
     if (scope.entries.length === 0) {
       const release = scope.release;
       scope.release = undefined;
       release?.();
     }
+    this.unwatchIdle(scope);
   }
 
   private publish(scope: UploadScope): void {
     if (this.disposed) return;
     scope.snapshot = {
       items: scope.entries.filter(entry => !entry.attached)
-        .map(({ id, name, size, status, error }) => ({ id, name, size, status, ...(error ? { error } : {}) })),
+        .map(({ id, name, size, status, error, file, url }) => ({
+          id, name, size, status, ...(error ? { error } : {}), ...(file ? { file } : {}), ...(url ? { url } : {}),
+        })),
       ...(scope.error ? { error: scope.error } : {}),
     };
     for (const listener of scope.listeners) listener();
@@ -314,10 +391,17 @@ export class UploadStore {
     this.disposed = true;
     for (const scope of this.scopes.values()) {
       scope.listeners.clear();
-      for (const entry of scope.entries) entry.controller?.abort();
+      scope.unsubscribe?.();
+      scope.unsubscribe = undefined;
+      scope.owned.clear();
+      for (const entry of scope.entries) {
+        entry.controller?.abort();
+        entry.file = undefined;
+      }
       const release = scope.release;
       scope.release = undefined;
       scope.entries = [];
+      scope.snapshot = { items: [] };
       release?.();
     }
     this.scopes.clear();

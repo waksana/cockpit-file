@@ -39,6 +39,7 @@ class Draft implements ModuleDraft {
     this.emit();
   }
   editText(text: string) { this.snapshot = { ...this.snapshot, text }; this.emit(); }
+  setPending(pending: boolean) { this.snapshot = { ...this.snapshot, pending }; this.emit(); }
   block() {
     this.blocks++;
     this.emit();
@@ -140,7 +141,7 @@ test('failed upload retains its File and operation ID for an explicit retry', as
   await settle();
   assert.match(store.snapshot(draft).items[0]!.error!, /Disk busy/);
   assert.equal(draft.blocks, 1);
-  assert.equal(errors.length, 1);
+  assert.equal(errors.length, 0, 'the file item owns its upload error, without a second global notification');
   store.retry(draft, 'operation-1');
   assert.equal(calls[1]!.path, calls[0]!.path);
   assert.equal(calls[1]!.init!.body, file);
@@ -151,7 +152,7 @@ test('failed upload retains its File and operation ID for an explicit retry', as
   store.dispose();
 });
 
-test('removing a failed first file unblocks its already attached successor without DELETE', async () => {
+test('removing a failed first file unblocks its successor and discards only its upload operation', async () => {
   const { store, calls } = uploadHarness();
   const draft = new Draft('session');
   store.receive([new File(['a'], 'a'), new File(['b'], 'b')], composer(draft));
@@ -166,7 +167,9 @@ test('removing a failed first file unblocks its already attached successor witho
   assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['second']);
   assert.equal(draft.appended.length, writes, 'removal must not re-append an already ready successor');
   assert.equal(draft.blocks, 0);
-  assert.deepEqual(calls.map(call => call.init!.method), ['POST', 'POST']);
+  assert.deepEqual(calls.map(call => call.init!.method), ['POST', 'POST', 'DELETE']);
+  assert.equal(calls[2]!.path, '/uploads/operation-1');
+  calls[2]!.response.resolve(new Response(null, { status: 204 }));
   store.dispose();
 });
 
@@ -346,8 +349,9 @@ test('remove and teardown abort work, suppress late callbacks and release guards
   store.receive([new File(['b'], 'b')], composer(draft));
   store.dispose();
   const before = notifications;
-  assert.equal(calls[1]!.init!.signal!.aborted, true);
-  calls[1]!.response.resolve(uploaded('disposed'));
+  assert.equal(calls[2]!.init!.signal!.aborted, true);
+  calls[1]!.response.resolve(new Response(null, { status: 204 }));
+  calls[2]!.response.resolve(uploaded('disposed'));
   await settle();
   assert.equal(notifications, before);
   assert.equal(draft.appended.length, 0);
@@ -569,6 +573,226 @@ test('operation ID creation failures cannot leak an empty upload guard', () => {
   assert.equal(calls.length, 0);
   assert.match(store.snapshot(draft).error!, /secure browser connection/);
   store.dispose();
+});
+
+test('ready discard eligibility outlives ordering entries without retaining browser Files', async () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  const file = new File(['synthetic'], 'duplicate.txt');
+  store.receive([file, file], composer(draft));
+  calls[0]!.response.resolve(uploaded('first'));
+  calls[1]!.response.resolve(uploaded('second'));
+  await settle();
+  assert.equal(store.snapshot(draft).items.length, 0, 'successes were pruned from ordering entries');
+  assert.equal(draft.listeners.size, 1, 'pending is still watched with no mounted view');
+  assert.equal(draft.blocks, 0);
+  store.removeAttachment(draft, 'cf-upload:operation-1');
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.id), ['cf-upload:operation-2']);
+  assert.equal(calls[2]!.path, '/uploads/operation-1');
+  assert.equal(calls[2]!.init!.method, 'DELETE');
+  assert.equal(draft.blocks, 0, 'DELETE acknowledgement never blocks sending');
+  store.removeAttachment(draft, 'cf-upload:operation-1');
+  assert.equal(calls.length, 3, 'the same operation is discarded at most once');
+  store.removeAttachment(draft, 'cf-upload:operation-2');
+  assert.equal(calls[3]!.path, '/uploads/operation-2', 'identical selections are independent uploads');
+  assert.equal(draft.listeners.size, 0, 'an empty scope stops watching the draft');
+  for (const call of calls.slice(2)) call.response.resolve(new Response(null, { status: 204 }));
+  await settle();
+  store.dispose();
+});
+
+test('pending observed while the view is unmounted permanently protects prior owned uploads', async () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  const unmount = store.subscribe(draft, () => {});
+  store.receive([new File(['a'], 'a')], composer(draft));
+  calls[0]!.response.resolve(uploaded('first'));
+  await settle();
+  unmount();
+  assert.equal(draft.listeners.size, 1);
+  draft.setPending(true);
+  draft.setPending(false);
+  assert.equal(draft.listeners.size, 0);
+  store.removeAttachment(draft, 'cf-upload:operation-1');
+  assert.equal(calls.length, 1, 'an unconfirmed native submission must preserve the original');
+  assert.equal(draft.snapshot.attachments.length, 0);
+  store.receive([new File(['b'], 'b')], composer(draft));
+  calls[1]!.response.resolve(uploaded('second'));
+  await settle();
+  store.removeAttachment(draft, 'cf-upload:operation-2');
+  assert.equal(calls[2]!.path, '/uploads/operation-2', 'a future upload after pending ends is independently eligible');
+  calls[2]!.response.resolve(new Response(null, { status: 204 }));
+  store.dispose();
+});
+
+test('synchronous current pending checks protect removals even without a subscription notification', async () => {
+  for (const complete of [false, true]) {
+    const { store, calls } = uploadHarness();
+    const draft = new Draft('session');
+    store.receive([new File(['a'], 'a')], composer(draft));
+    if (complete) { calls[0]!.response.resolve(uploaded('first')); await settle(); }
+    draft.snapshot = { ...draft.snapshot, pending: true };
+    if (complete) store.removeAttachment(draft, 'cf-upload:operation-1');
+    else store.remove(draft, 'operation-1');
+    assert.equal(calls.length, 1);
+    assert.equal(draft.snapshot.pending, true, 'the module does not clear native pending or bypass sending');
+    assert.equal(draft.blocks, 0);
+    store.dispose();
+  }
+});
+
+test('uploads begun during native pending, and unfinished uploads crossing pending, remain protected', async () => {
+  for (const initiallyPending of [false, true]) {
+    const { store, calls } = uploadHarness();
+    const draft = new Draft('session');
+    draft.setPending(initiallyPending);
+    store.receive([new File(['a'], 'a'), new File(['b'], 'b')], composer(draft));
+    draft.setPending(true);
+    draft.setPending(false);
+    calls[0]!.response.resolve(uploaded('first'));
+    await settle();
+    store.removeAttachment(draft, 'cf-upload:operation-1');
+    store.remove(draft, 'operation-2');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1]!.init!.signal!.aborted, true);
+    calls[1]!.response.resolve(uploaded('late'));
+    await settle();
+    assert.equal(draft.snapshot.attachments.length, 0);
+    assert.equal(draft.blocks, 0);
+    store.dispose();
+  }
+});
+
+test('restored, foreign, capture and replaced attachment identities never authorize a DELETE', async () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  draft.appendAttachments([
+    { id: 'cf-upload:operation-123', value: { type: 'file', path: `${prefix}${fileId('restored')}/ready/body.txt` } },
+    { id: fileId('capture'), value: { type: 'file', path: `${prefix}${fileId('capture')}/ready/body.txt` } },
+    { id: 'native', value: { type: 'file', path: '/synthetic/native.txt' } },
+  ]);
+  for (const item of [...draft.snapshot.attachments]) store.removeAttachment(draft, item.id);
+  assert.equal(calls.length, 0);
+  store.receive([new File(['a'], 'a')], composer(draft));
+  calls[0]!.response.resolve(uploaded('first'));
+  await settle();
+  draft.appendAttachments([{ id: 'cf-upload:operation-1', value: { type: 'file', path: '/synthetic/replacement' } }]);
+  store.removeAttachment(draft, 'cf-upload:operation-1');
+  assert.equal(calls.length, 1);
+  store.dispose();
+});
+
+test('another draft handle cannot inherit this activation’s removal eligibility', async () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  store.receive([new File(['a'], 'a')], composer(draft));
+  calls[0]!.response.resolve(uploaded('first'));
+  await settle();
+  const restored = new Draft('session');
+  restored.snapshot = structuredClone(draft.snapshot);
+  store.removeAttachment(restored, 'cf-upload:operation-1');
+  assert.equal(calls.length, 1);
+  assert.equal(draft.snapshot.attachments.length, 1);
+  draft.setPending(true);
+  draft.setPending(false);
+  store.removeAttachment(draft, 'cf-upload:operation-1');
+  assert.equal(calls.length, 1, 'the original subscription was not redirected to the restored handle');
+  store.dispose();
+});
+
+test('uncertain, failed and not-yet-acknowledged uploads are discarded once without awaiting DELETE', async () => {
+  for (const status of [undefined, 202, 503]) {
+    const { store, calls } = uploadHarness();
+    const draft = new Draft('session');
+    store.receive([new File(['a'], 'a')], composer(draft));
+    if (status !== undefined) {
+      calls[0]!.response.resolve(Response.json({ error: 'Commit not confirmed' }, { status }));
+      await settle();
+    }
+    store.remove(draft, 'operation-1');
+    assert.equal(store.snapshot(draft).items.length, 0);
+    assert.equal(draft.blocks, 0);
+    assert.equal(calls[1]!.path, '/uploads/operation-1');
+    assert.equal(calls[1]!.init!.method, 'DELETE');
+    store.remove(draft, 'operation-1');
+    store.retry(draft, 'operation-1');
+    assert.equal(calls.length, 2);
+    calls[0]!.response.resolve(uploaded('late'));
+    calls[1]!.response.resolve(new Response(null, { status: 204 }));
+    await settle();
+    assert.equal(draft.snapshot.attachments.length, 0);
+    store.dispose();
+  }
+});
+
+test('DELETE rejection and every non-204 response report failure without undoing removal', async () => {
+  for (const status of [undefined, 200, 202, 403, 500]) {
+    const { store, calls, errors } = uploadHarness();
+    const draft = new Draft('session');
+    store.receive([new File(['a'], 'a')], composer(draft));
+    calls[0]!.response.resolve(uploaded('first'));
+    await settle();
+    store.removeAttachment(draft, 'cf-upload:operation-1');
+    if (status === undefined) calls[1]!.response.reject(new Error('Delete connection lost'));
+    else calls[1]!.response.resolve(new Response(null, { status }));
+    await settle();
+    assert.equal(errors.length, 1);
+    assert.match(String(errors[0]), status === undefined ? /connection lost/ : new RegExp(`HTTP ${status}`));
+    assert.equal(draft.snapshot.attachments.length, 0);
+    assert.equal(draft.blocks, 0);
+    store.dispose();
+  }
+});
+
+test('host removal errors preserve an eligible original and are reported without DELETE', async () => {
+  const { store, calls, errors } = uploadHarness();
+  const draft = new Draft('session');
+  store.receive([new File(['a'], 'a')], composer(draft));
+  calls[0]!.response.resolve(uploaded('first'));
+  await settle();
+  draft.removeAttachment = () => { throw new Error('Draft removal rejected'); };
+  store.removeAttachment(draft, 'cf-upload:operation-1');
+  assert.equal(calls.length, 1);
+  assert.equal(errors.length, 1);
+  assert.equal(draft.snapshot.attachments.length, 1);
+  store.dispose();
+});
+
+test('only unresolved jobs retain Files; eligibility stays bounded and never deletes on dispose or ACK', async () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  const internals = store as unknown as {
+    scopes: Map<string, { entries: { file?: File }[]; owned: Map<string, unknown>; snapshot: { items: { file?: File }[] } }>;
+  };
+  for (let index = 0; index < 25; index++) {
+    const start = calls.length;
+    store.receive([new File(['a'], 'a')], composer(draft));
+    calls[start]!.response.resolve(uploaded(`file-${index}`));
+    await settle();
+    const scope = internals.scopes.get(draft.sessionId)!;
+    assert.equal(scope.owned.size, 1);
+    assert.equal(scope.entries.length, 0);
+    assert.equal(scope.snapshot.items.length, 0);
+    draft.setPending(true);
+    draft.removeAttachment(`cf-upload:operation-${index + 1}`);
+    draft.setPending(false);
+    assert.equal(scope.owned.size, 0);
+    assert.equal(draft.listeners.size, 0);
+  }
+  const start = calls.length;
+  draft.appendAttachments = () => { throw new Error('Append failed'); };
+  store.receive([new File(['b'], 'b')], composer(draft));
+  calls[start]!.response.resolve(uploaded('saved'));
+  await settle();
+  const scope = internals.scopes.get(draft.sessionId)!;
+  assert.ok(scope.entries.every(entry => !entry.file));
+  assert.ok(scope.snapshot.items.every(entry => !entry.file), 'successful upload bytes are not kept for append retry');
+  store.dispose();
+  assert.equal(scope.owned.size, 0);
+  assert.equal(scope.entries.length, 0);
+  assert.equal(scope.snapshot.items.length, 0);
+  assert.equal(draft.listeners.size, 0);
+  assert.ok(calls.every(call => call.init!.method === 'POST'), 'ACK and module teardown do not delete originals');
 });
 
 class Clock implements ProbeClock {

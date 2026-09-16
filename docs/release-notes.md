@@ -1,10 +1,15 @@
-# Cockpit File 0.1.0
+# Cockpit File 0.1.1
 
-Initial local file module for Cockpit Module API v1.
+Unreleased compact file-card update for Cockpit Module API v1.
 
 - Chat uploads, paste/drop attachments, native attachment submission, previews and downloads.
 - Successful uploads persist immediately in the host draft; refresh discards unfinished selections.
 - Native blob cards use available inline bytes or show an explicit unavailable state without historical recovery.
+- Draft and message attachments share compact thumbnail cards with item-local upload feedback.
+- The attachment action follows the host's borderless icon-button style. Normal upload blockers
+  no longer need a separate host notice or a duplicate native-attachment accordion.
+- Explicitly removed, never-submitted uploads from the current page can be discarded asynchronously.
+  Restored attachments and files already handed to native submission retain their originals.
 - Best-effort incremental capture of new Markdown file references with immutable per-message originals.
 - Five-second card loading budget; no historical backfill or content deduplication.
 - Local trusted `.tgz` installation only. No global file-library management or remote installer.

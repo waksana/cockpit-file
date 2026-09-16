@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { mkdir, open, realpath, rename, rm } from 'node:fs/promises';
+import { mkdir, open, readdir, realpath, rename, rm, rmdir, unlink } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
 import { basename, extname, isAbsolute, join, resolve } from 'node:path';
@@ -14,6 +14,9 @@ const BODY = /^body(?:\.[a-z0-9]{1,16})?$/;
 const READ_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const DIRECTORY_FLAGS = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
 const activeOperations = new Map<string, string>();
+const uploadTasks = new Map<string, {
+  kind: 'upload' | 'discard'; controller: AbortController; promise: Promise<unknown>;
+}>();
 const STAMP_FIELDS = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs'] as const;
 
 export interface FileMetadata {
@@ -48,6 +51,7 @@ export interface FileStorage {
   readonly root: string;
   readonly maxBytes: number;
   upload(operationId: string, stream: FileInput, name: string, mime?: string, signal?: AbortSignal): Promise<FileMetadata>;
+  discardUpload(operationId: string): Promise<void>;
   capture(messageKey: string, reference: string, sourcePath: string, signal?: AbortSignal): Promise<FileMetadata>;
   lookupFile(fileId: string): Promise<FileLookup>;
   lookupUpload(operationId: string): Promise<FileLookup>;
@@ -75,6 +79,7 @@ type BodyStamp = Record<typeof STAMP_FIELDS[number], string>;
 type OperationOwner = { pid: number; operation: string };
 type DiskMetadata = Omit<FileMetadata, 'path'> & { body: string; bodyStamp: BodyStamp; identity: Identity; version: 2 };
 type State = { state: 'pending'; owner: OperationOwner } | { state: 'failed'; error: StoredFailure };
+type Discard = { version: 1; id: string; owner: OperationOwner };
 
 function failure(code: string, message: string, cause?: unknown): FileStorageError {
   return new FileStorageError(code, message, { cause });
@@ -88,6 +93,13 @@ function asFailure(error: unknown): FileStorageError {
 function key(value: string, field: string): string {
   if (typeof value !== 'string' || !value || value.length > 16384 || value.includes('\0')) {
     throw failure('INVALID_INPUT', `${field} must be a nonempty string of at most 16384 characters`);
+  }
+  return value;
+}
+function uploadKey(value: string): string {
+  key(value, 'operationId');
+  if (/[\x00-\x20\x7f/\\:]/.test(value) || value === '.' || value === '..' || ID.test(value)) {
+    throw failure('INVALID_INPUT', 'Expected an upload operation ID, not a path or managed file ID');
   }
   return value;
 }
@@ -145,6 +157,24 @@ async function writeJson(parent: FileHandle, name: string, value: unknown): Prom
     await rename(path, fdPath(parent, name));
     await parent.sync();
   } finally { await rm(path, { force: true }); }
+}
+async function removeTree(parent: FileHandle, name: string): Promise<void> {
+  let handle: FileHandle;
+  try { handle = await directory(fdPath(parent, name)); }
+  catch (error) {
+    if (hasCode(error, 'ENOENT')) return;
+    if (!hasCode(error, 'ENOTDIR') && !hasCode(error, 'ELOOP')) throw error;
+    try { await unlink(fdPath(parent, name)); }
+    catch (error) { if (!hasCode(error, 'ENOENT')) throw error; }
+    return;
+  }
+  try {
+    // Recurse through pinned descriptors, never through replaceable path prefixes.
+    for (const child of await readdir(fdPath(handle))) await removeTree(handle, child);
+    await handle.sync();
+  } finally { await handle.close(); }
+  try { await rmdir(fdPath(parent, name)); }
+  catch (error) { if (!hasCode(error, 'ENOENT')) throw error; }
 }
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -336,7 +366,10 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
   } catch (error) { await rootHandle.close(); throw error; }
   const shutdown = new AbortController();
   const inFlight = new Map<string, Promise<FileMetadata>>();
+  const discards = new Set<Promise<void>>();
   const streams = new Set<Readable>();
+  const filesStat = await files.stat({ bigint: true });
+  const taskKey = (id: string) => `${filesStat.dev}:${filesStat.ino}:${id}`;
   let active = 0;
   let closing: Promise<void> | undefined;
 
@@ -346,6 +379,19 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
   async function slot(id: string): Promise<FileHandle | undefined> {
     try { return await directory(fdPath(files, id)); }
     catch (error) { if (hasCode(error, 'ENOENT')) return undefined; throw asFailure(error); }
+  }
+  async function discarded(handle: FileHandle, id: string): Promise<Discard | undefined> {
+    let value: unknown;
+    try { value = await readJson(handle, 'discarded.json'); }
+    catch (error) { if (hasCode(error, 'ENOENT')) return undefined; throw error; }
+    if (!object(value) || value.version !== 1 || value.id !== id || !validOwner(value.owner)) {
+      throw failure('CORRUPT', 'Invalid upload discard marker');
+    }
+    return value as Discard;
+  }
+  function validOwner(owner: unknown): owner is OperationOwner {
+    return object(owner) && Number.isSafeInteger(owner.pid) && (owner.pid as number) > 0
+      && typeof owner.operation === 'string' && /^[a-f0-9-]{36}$/.test(owner.operation);
   }
   async function metadata(handle: FileHandle, id: string): Promise<DiskMetadata | undefined> {
     let ready: FileHandle;
@@ -412,12 +458,16 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
     const handle = await slot(id);
     if (!handle) return inFlight.has(id) ? { state: 'pending', fileId: id } : { state: 'no-record' };
     try {
+      if (await discarded(handle, id)) return { state: 'no-record' };
       const saved = await metadata(handle, id);
       if (saved) return { state: 'ready', file: publicMetadata(saved) };
       const identity = parseIdentity(await readJson(handle, 'identity.json'));
       if (identityId(identity) !== id) throw failure('CORRUPT', 'Stored identity mismatch');
       return await lookupState(handle, id);
-    } catch (error) { throw asFailure(error); }
+    } catch (error) {
+      if (await discarded(handle, id)) return { state: 'no-record' };
+      throw asFailure(error);
+    }
     finally { await handle.close(); }
   }
   async function reserve(identity: Identity, owner: OperationOwner): Promise<{ handle: FileHandle; created: boolean }> {
@@ -448,18 +498,14 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
     let attemptOwned = false;
     let committed = false;
     try {
+      if (await discarded(handle, id)) throw failure('DISCARDED', 'Upload operation was permanently discarded');
       const previousIdentity = parseIdentity(await readJson(handle, 'identity.json'));
       if (identityId(previousIdentity) !== id || (identity.kind === 'upload' && previousIdentity.name !== identity.name)) {
         throw failure('CONFLICT', 'The operation identity was already used for a different file');
       }
-      const saved = await metadata(handle, id);
+      const saved = identity.kind === 'capture' ? await metadata(handle, id) : undefined;
       if (saved) {
         committed = true;
-        if (identity.kind === 'capture') return publicMetadata(saved);
-        const verified = await consume(input as FileInput, maxBytes, signal);
-        if (verified.size !== saved.size || verified.sha256 !== saved.sha256 || verified.mime !== saved.mime) {
-          throw failure('CONFLICT', 'Upload retry bytes differ from the committed original');
-        }
         return publicMetadata(saved);
       }
       const state = await readJson(handle, 'state.json');
@@ -486,6 +532,7 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
         throw error;
       }
       attempt = await directory(fdPath(handle, 'attempt'));
+      if (await discarded(handle, id)) throw failure('DISCARDED', 'Upload operation was permanently discarded');
       const concurrentlyCommitted = await metadata(handle, id);
       if (concurrentlyCommitted) {
         committed = true;
@@ -565,7 +612,7 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
           cause: reason, fileId: id, committed: true,
         });
       }
-      if (attemptOwned && !committed) {
+      if (attemptOwned && !committed && !await discarded(handle, id)) {
         try { await writeJson(handle, 'state.json', { state: 'failed', error: { code: reason.code, message: reason.message } } satisfies State); }
         catch (recordError) {
           throw new FileStorageError('STATE_UNCERTAIN', 'Operation failed and its failure record could not be persisted', {
@@ -577,7 +624,7 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
     } finally {
       try {
         if (attempt) await attempt.close();
-        if (attemptOwned) await rm(fdPath(handle, 'attempt'), { recursive: true, force: true });
+        if (attemptOwned) await removeTree(handle, 'attempt');
       } catch (error) {
         throw new FileStorageError('CLEANUP_FAILED', 'Could not clean this operation staging directory; query the same identity', {
           cause: error, fileId: id, committed,
@@ -593,27 +640,111 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
     const id = identityId(identity);
     const existing = inFlight.get(id);
     if (existing && identity.kind === 'capture') return existing;
-    const combined = signal ? AbortSignal.any([signal, shutdown.signal]) : shutdown.signal;
+    const local = identity.kind === 'upload' ? uploadTasks.get(taskKey(id)) : undefined;
+    if (local) return Promise.reject(failure(local.kind === 'discard' ? 'DISCARDED' : 'PENDING',
+      local.kind === 'discard' ? 'Upload discard is in progress' : 'Upload operation is already in progress'));
+    const controller = new AbortController();
+    const combined = AbortSignal.any([...(signal ? [signal] : []), shutdown.signal, controller.signal]);
     if (existing) return Promise.reject(failure('PENDING', 'Upload operation is already in progress; query or retry the same identity'));
     if (active >= maxConcurrent) return Promise.reject(failure('BUSY', 'File storage concurrency limit reached'));
     active++;
     const owner = { pid: process.pid, operation: randomUUID() };
     activeOperations.set(owner.operation, id);
     const promise = execute(identity, input, combined, owner).finally(async () => {
-      active--;
-      activeOperations.delete(owner.operation);
-      if (inFlight.get(id) === promise) inFlight.delete(id);
-      if (input instanceof Readable) input.destroy();
-      else if (typeof input !== 'string' && 'cancel' in input && !input.locked) await input.cancel();
+      try {
+        if (input instanceof Readable) input.destroy();
+        else if (typeof input !== 'string' && 'cancel' in input && !input.locked) {
+          let onAbort = () => {};
+          const cancellation = new Promise<void>(resolve => { onAbort = resolve; });
+          combined.addEventListener('abort', onAbort, { once: true });
+          if (combined.aborted) onAbort();
+          try { await Promise.race([input.cancel(), cancellation]); }
+          finally { combined.removeEventListener('abort', onAbort); }
+        }
+      } finally {
+        active--;
+        activeOperations.delete(owner.operation);
+        if (uploadTasks.get(taskKey(id))?.promise === promise) uploadTasks.delete(taskKey(id));
+        if (inFlight.get(id) === promise) inFlight.delete(id);
+      }
     });
     inFlight.set(id, promise);
+    if (identity.kind === 'upload') uploadTasks.set(taskKey(id), { kind: 'upload', controller, promise });
+    return promise;
+  }
+  async function discard(identity: Identity, owner: OperationOwner): Promise<void> {
+    const id = identityId(identity);
+    const { handle } = await reserve(identity, owner);
+    let attemptOwned = false;
+    try {
+      const previousIdentity = parseIdentity(await readJson(handle, 'identity.json'));
+      if (previousIdentity.kind !== 'upload' || identityId(previousIdentity) !== id) {
+        throw failure('CORRUPT', 'Stored upload identity mismatch');
+      }
+      try { await mkdir(fdPath(handle, 'attempt'), { mode: 0o700 }); attemptOwned = true; }
+      catch (error) {
+        if (!hasCode(error, 'EEXIST')) throw error;
+        // State can predate a foreign owner's mkdir, so it cannot authorize lock reclamation.
+        throw failure('ACTIVITY_UNKNOWN', 'Another process may own this operation staging; discard was not performed');
+      }
+      let state: unknown;
+      try { state = await readJson(handle, 'state.json'); }
+      catch (error) { if (!hasCode(error, 'ENOENT') || !await discarded(handle, id)) throw error; }
+      if (object(state) && state.state === 'pending'
+          && (!validOwner(state.owner) || state.owner.pid !== process.pid)
+          && !await discarded(handle, id) && !await metadata(handle, id)) {
+        throw failure('ACTIVITY_UNKNOWN', 'Pending upload ownership cannot be confirmed; discard was not performed');
+      }
+      await writeJson(handle, 'discarded.json', { version: 1, id, owner } satisfies Discard);
+      await removeTree(handle, 'ready');
+      await rm(fdPath(handle, 'state.json'), { force: true });
+      await handle.sync();
+    } catch (error) { throw asFailure(error); }
+    finally {
+      try {
+        if (attemptOwned) { await removeTree(handle, 'attempt'); await handle.sync(); }
+      } catch (error) {
+        throw new FileStorageError('CLEANUP_FAILED', 'Upload discard cleanup failed; retry the same operation identity', {
+          cause: error, fileId: id,
+        });
+      } finally { await handle.close(); }
+    }
+  }
+  function discardUpload(operationId: string): Promise<void> {
+    ensureOpen();
+    const identity: Identity = { kind: 'upload', operationId: uploadKey(operationId), name: '' };
+    const id = identityId(identity);
+    const token = taskKey(id);
+    const previous = uploadTasks.get(token);
+    if (previous?.kind !== 'discard' && discards.size >= maxConcurrent) {
+      return Promise.reject(failure('BUSY', 'Upload discard concurrency limit reached'));
+    }
+    const owner = { pid: process.pid, operation: randomUUID() };
+    const controller = new AbortController();
+    if (previous?.kind === 'upload') previous.controller.abort();
+    const promise = previous?.kind === 'discard' ? previous.promise as Promise<void> : (async () => {
+      // Do not share the upload worker queue: a stalled upload must be cancelled first.
+      if (previous) await Promise.allSettled([previous.promise]);
+      try { await discard(identity, owner); }
+      catch (error) { throw asFailure(error); }
+    })().finally(() => {
+      activeOperations.delete(owner.operation);
+      if (uploadTasks.get(token)?.promise === promise) uploadTasks.delete(token);
+    });
+    if (previous?.kind !== 'discard') {
+      activeOperations.set(owner.operation, id);
+      uploadTasks.set(token, { kind: 'discard', controller, promise });
+    }
+    discards.add(promise);
+    void promise.then(() => discards.delete(promise), () => discards.delete(promise));
     return promise;
   }
   return {
     root, maxBytes,
     upload(operationId, stream, name, _mime, signal) {
-      return schedule({ kind: 'upload', operationId: key(operationId, 'operationId'), name: nameOf(name) }, stream, signal);
+      return schedule({ kind: 'upload', operationId: uploadKey(operationId), name: nameOf(name) }, stream, signal);
     },
+    discardUpload,
     capture(messageKey, reference, sourcePath, signal) {
       key(sourcePath, 'sourcePath');
       if (!isAbsolute(sourcePath)) throw failure('INVALID_INPUT', 'Capture source must be an explicitly resolved absolute path');
@@ -623,7 +754,7 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
     },
     lookupFile,
     lookupUpload(operationId) {
-      return lookupFile(identityId({ kind: 'upload', operationId: key(operationId, 'operationId'), name: '' }));
+      return lookupFile(identityId({ kind: 'upload', operationId: uploadKey(operationId), name: '' }));
     },
     lookupCapture(messageKey, reference) {
       return lookupFile(identityId({ kind: 'capture', messageKey: key(messageKey, 'messageKey'), reference: key(reference, 'reference'), name: '' }));
@@ -635,6 +766,7 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
       if (!handle) throw failure(inFlight.has(id) ? 'PENDING' : 'NOT_FOUND', 'No ready managed file record');
       let body: FileHandle | undefined;
       try {
+        if (await discarded(handle, id)) throw failure('NOT_FOUND', 'Upload operation was discarded');
         let saved = await metadata(handle, id);
         if (!saved) {
           const state = await lookupState(handle, id);
@@ -662,7 +794,10 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
         streams.add(stream);
         stream.once('close', () => streams.delete(stream));
         return { file: publicMetadata(saved), stream, start, end, length: saved.size === 0 ? 0 : end - start + 1 };
-      } catch (error) { throw asFailure(error); }
+      } catch (error) {
+        if (await discarded(handle, id)) throw failure('NOT_FOUND', 'Upload operation was discarded');
+        throw asFailure(error);
+      }
       finally { if (body) await body.close(); await handle.close(); }
     },
     close() {
@@ -670,7 +805,7 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
         shutdown.abort(failure('CLOSED', 'File storage closed'));
         for (const stream of streams) stream.destroy();
         closing = (async () => {
-          await Promise.allSettled(inFlight.values());
+          await Promise.allSettled([...inFlight.values(), ...discards]);
           await staging.close();
           await files.close();
           await rootHandle.close();

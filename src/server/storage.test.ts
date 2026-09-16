@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
+import { once } from 'node:events';
+import { promises as filesystem } from 'node:fs';
 import { chmod, mkdir, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -36,6 +40,20 @@ async function read(storage: FileStorage, id: string, range?: { start: number; e
 }
 function code(expected: string) {
   return (error: unknown) => error instanceof FileStorageError && error.code === expected;
+}
+function gate() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+async function pendingUpload(storage: FileStorage, operationId: string) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const result = await storage.lookupUpload(operationId);
+    if (result.state === 'pending') return result.fileId;
+    await delay(2);
+  }
+  throw new Error('Upload did not become pending');
 }
 
 test('streamed upload commits original and per-file JSON together with a safe stable identity', async t => {
@@ -484,4 +502,296 @@ test('pending ownership is checked per record, without a sweep or recapturing st
   await assert.rejects(restarted.capture('owner', './source', source), code('ACTIVITY_UNKNOWN'));
   assert.deepEqual(JSON.parse(await readFile(statePath, 'utf8')), foreign);
   assert.deepEqual((await readdir(join(root, 'files', state.fileId))).sort(), ['identity.json', 'state.json']);
+});
+
+test('discard removes only one independent upload, persists its tombstone, and never touches captures', async t => {
+  const { storage, root, parent, reopen } = await fixture(t);
+  const first = await storage.upload('discard-one', bytes('same'), 'same.txt');
+  const second = await storage.upload('keep-two', bytes('same'), 'same.txt');
+  const source = join(parent, 'same.txt');
+  await writeFile(source, 'same');
+  const capture = await storage.capture('message', './same.txt', source);
+  await storage.discardUpload('discard-one');
+  await storage.discardUpload('discard-one');
+  assert.deepEqual(await storage.lookupUpload('discard-one'), { state: 'no-record' });
+  assert.deepEqual(await storage.lookupFile(first.id), { state: 'no-record' });
+  await assert.rejects(storage.openFile(first.id), code('NOT_FOUND'));
+  await assert.rejects(stat(first.path), { code: 'ENOENT' });
+  assert.deepEqual((await readdir(join(root, 'files', first.id))).sort(), ['discarded.json', 'identity.json']);
+  assert.equal((await read(storage, second.id)).bytes.toString(), 'same');
+  assert.equal((await read(storage, capture.id)).bytes.toString(), 'same');
+  assert.equal(await readFile(source, 'utf8'), 'same');
+  await rm(source);
+  await storage.close();
+  const fresh = await reopen();
+  await fresh.discardUpload('discard-one');
+  await assert.rejects(fresh.upload('discard-one', bytes('same'), 'same.txt'), code('DISCARDED'));
+  await assert.rejects(fresh.upload('discard-one', bytes('different'), 'new.txt'), code('DISCARDED'));
+  assert.deepEqual(await fresh.lookupFile(first.id), { state: 'no-record' });
+  assert.equal((await read(fresh, capture.id)).bytes.toString(), 'same');
+});
+
+test('discard before a queued or future upload is durable, including repeated requests from different handles', async t => {
+  const { storage, reopen } = await fixture(t);
+  const peer = await reopen();
+  await Promise.all([storage.discardUpload('not-started'), peer.discardUpload('not-started')]);
+  await assert.rejects(storage.upload('not-started', bytes('late body'), 'late.txt'), code('DISCARDED'));
+  await storage.close();
+  const fresh = await reopen();
+  await assert.rejects(fresh.upload('not-started', bytes('late retry'), 'late.txt'), code('DISCARDED'));
+  assert.deepEqual(await fresh.lookupUpload('not-started'), { state: 'no-record' });
+});
+
+test('discard cancels a stalled upload across handles even at the concurrency limit and close awaits cleanup', async t => {
+  const { storage, root, reopen } = await fixture(t, { maxConcurrent: 1 });
+  const peer = await reopen();
+  const input = new Readable({ read() {} });
+  const upload = storage.upload('stalled', input, 'stalled.txt');
+  const checked = assert.rejects(upload, code('ABORTED'));
+  const id = await pendingUpload(storage, 'stalled');
+  input.push(Buffer.from('partial original'));
+  let partial = false;
+  const deadline = Date.now() + 3000;
+  while (!partial && Date.now() < deadline) {
+    try { partial = (await stat(join(root, 'files', id, 'attempt', 'payload', 'body'))).size > 0; }
+    catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
+    if (!partial) await delay(2);
+  }
+  assert.equal(partial, true);
+  const discard = peer.discardUpload('stalled');
+  await Promise.all([discard, checked, peer.close()]);
+  assert.equal(input.destroyed, true);
+  assert.deepEqual(await storage.lookupUpload('stalled'), { state: 'no-record' });
+  assert.deepEqual((await readdir(join(root, 'files', id))).sort(), ['discarded.json', 'identity.json']);
+  await assert.rejects(storage.upload('stalled', bytes('late'), 'stalled.txt'), code('DISCARDED'));
+  assert.equal((await storage.upload('independent', bytes('ok'), 'ok.txt')).size, 2);
+});
+
+test('discard cancels a stalled web reader without retaining an in-flight operation', async t => {
+  const { storage } = await fixture(t);
+  let cancelled = false;
+  const input = new ReadableStream<Uint8Array>({ cancel() { cancelled = true; } });
+  const upload = storage.upload('web-discard', input, 'web.txt');
+  const checked = assert.rejects(upload, code('ABORTED'));
+  const deadline = Date.now() + 3000;
+  while (!input.locked && Date.now() < deadline) await delay(2);
+  assert.equal(input.locked, true);
+  await storage.discardUpload('web-discard');
+  await checked;
+  assert.equal(cancelled, true);
+  assert.equal(input.locked, false);
+  await storage.close();
+});
+
+test('discard does not wait forever for an unstarted caller-owned web stream cancellation', { timeout: 3000 }, async t => {
+  const { storage } = await fixture(t, { maxConcurrent: 1 });
+  let cancelled = false;
+  const input = new ReadableStream<Uint8Array>({
+    cancel() { cancelled = true; return new Promise<void>(() => {}); },
+  });
+  const upload = storage.upload('unstarted-web', input, 'web.txt');
+  const checked = assert.rejects(upload, code('ABORTED'));
+  await storage.discardUpload('unstarted-web');
+  await checked;
+  assert.equal(cancelled, true);
+  assert.equal((await storage.upload('next-web', bytes('ok'), 'ok.txt')).size, 2);
+  await storage.close();
+});
+
+test('failed uploads can be discarded and cannot be retried back to ready', async t => {
+  const { storage } = await fixture(t, { maxBytes: 1 });
+  await assert.rejects(storage.upload('failed-discard', bytes('too large'), 'file'), code('LIMIT_EXCEEDED'));
+  await storage.discardUpload('failed-discard');
+  assert.deepEqual(await storage.lookupUpload('failed-discard'), { state: 'no-record' });
+  await assert.rejects(storage.upload('failed-discard', bytes('x'), 'file'), code('DISCARDED'));
+});
+
+test('discard racing atomic publication waits for the publisher and removes the committed original', async t => {
+  const { storage, root } = await fixture(t, { maxConcurrent: 1 });
+  const original = filesystem.rename;
+  const published = gate();
+  const release = gate();
+  t.mock.method(filesystem, 'rename', async (...args: Parameters<typeof rename>) => {
+    await original(...args);
+    if (String(args[1]).endsWith('/ready')) { published.resolve(); await release.promise; }
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const upload = storage.upload('publish-race', bytes('committed before ACK'), 'saved.txt');
+  await published.promise;
+  let finished = false;
+  const discard = storage.discardUpload('publish-race').then(() => { finished = true; });
+  await assert.rejects(storage.discardUpload('separate-discard'), code('BUSY'));
+  await delay(5);
+  assert.equal(finished, false);
+  release.resolve();
+  const saved = await upload;
+  await discard;
+  await assert.rejects(stat(saved.path), { code: 'ENOENT' });
+  assert.deepEqual(await storage.lookupFile(saved.id), { state: 'no-record' });
+  assert.deepEqual((await readdir(join(root, 'files', saved.id))).sort(), ['discarded.json', 'identity.json']);
+  await storage.discardUpload('separate-discard');
+});
+
+test('discard cancels verification of an already committed upload without resurrecting its body', async t => {
+  const { storage, reopen } = await fixture(t);
+  const peer = await reopen();
+  const saved = await storage.upload('verify-discard', bytes('original'), 'file.txt');
+  const reading = gate();
+  const input = new Readable({ read() { reading.resolve(); } });
+  const retry = peer.upload('verify-discard', input, 'file.txt');
+  const checked = assert.rejects(retry, error =>
+    error instanceof FileStorageError && error.code === 'ABORTED' && error.committed);
+  await reading.promise;
+  await storage.discardUpload('verify-discard');
+  await checked;
+  assert.equal(input.destroyed, true);
+  await assert.rejects(stat(saved.path), { code: 'ENOENT' });
+  assert.deepEqual(await peer.lookupUpload('verify-discard'), { state: 'no-record' });
+});
+
+test('discard rejects unknown foreign staging ownership without changing bytes or claiming success', async t => {
+  const { storage, root } = await fixture(t);
+  const saved = await storage.upload('foreign-discard', bytes('keep'), 'file.txt');
+  const slot = join(root, 'files', saved.id);
+  await mkdir(join(slot, 'attempt'), { mode: 0o700 });
+  const state = { state: 'pending', owner: { pid: process.pid + 1, operation: randomUUID() } };
+  await writeFile(join(slot, 'state.json'), JSON.stringify(state));
+  await assert.rejects(storage.discardUpload('foreign-discard'), code('ACTIVITY_UNKNOWN'));
+  assert.equal(await readFile(saved.path, 'utf8'), 'keep');
+  await assert.rejects(stat(join(slot, 'discarded.json')), { code: 'ENOENT' });
+  assert.deepEqual(JSON.parse(await readFile(join(slot, 'state.json'), 'utf8')), state);
+  await rm(join(slot, 'attempt'), { recursive: true });
+  await storage.discardUpload('foreign-discard');
+});
+
+test('an uncommitted foreign pending record cannot authorize discard even before its attempt appears', async t => {
+  const { storage, root } = await fixture(t, { maxBytes: 1 });
+  await assert.rejects(storage.upload('foreign-reserved', bytes('oversize'), 'file'), code('LIMIT_EXCEEDED'));
+  const failed = await storage.lookupUpload('foreign-reserved');
+  if (failed.state !== 'failed') throw new Error('Expected failed upload');
+  const slot = join(root, 'files', failed.fileId);
+  const state = { state: 'pending', owner: { pid: process.pid + 1, operation: randomUUID() } };
+  await writeFile(join(slot, 'state.json'), JSON.stringify(state));
+  await assert.rejects(storage.discardUpload('foreign-reserved'), code('ACTIVITY_UNKNOWN'));
+  assert.deepEqual((await readdir(slot)).sort(), ['identity.json', 'state.json']);
+  assert.deepEqual(JSON.parse(await readFile(join(slot, 'state.json'), 'utf8')), state);
+});
+
+test('an active foreign-process ready retry excludes discard until its staging lease is released', { timeout: 5000 }, async t => {
+  const { storage, root } = await fixture(t);
+  const saved = await storage.upload('foreign-retry', bytes('original'), 'file.txt');
+  const child = spawn(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `
+    import { createFileStorage } from ${JSON.stringify(new URL('./storage.ts', import.meta.url).href)};
+    import { Readable } from 'node:stream';
+    const storage = await createFileStorage({ root: ${JSON.stringify(root)} });
+    const controller = new AbortController();
+    process.once('message', () => controller.abort());
+    let sent = false;
+    const input = new Readable({ read() { if (!sent) { sent = true; process.send('reading'); } } });
+    try { await storage.upload('foreign-retry', input, 'file.txt', undefined, controller.signal); }
+    catch (error) { if (error.code !== 'ABORTED') throw error; }
+    await storage.close();
+    process.disconnect();
+  `], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
+  const exited = once(child, 'exit');
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    await exited;
+  });
+  assert.deepEqual(await once(child, 'message'), ['reading', undefined]);
+  await assert.rejects(storage.discardUpload('foreign-retry'), code('ACTIVITY_UNKNOWN'));
+  assert.equal(await readFile(saved.path, 'utf8'), 'original');
+  child.send('abort');
+  assert.deepEqual(await exited, [0, null]);
+  await storage.discardUpload('foreign-retry');
+  await assert.rejects(stat(saved.path), { code: 'ENOENT' });
+});
+
+test('discard errors are explicit and a durable marker prevents resurrection before cleanup retry', async t => {
+  const { storage, root } = await fixture(t);
+  const saved = await storage.upload('io-discard', bytes('private'), 'file.txt');
+  const original = filesystem.unlink;
+  t.mock.method(filesystem, 'unlink', async (path: Parameters<typeof original>[0]) => {
+    if (String(path).endsWith('/body.txt')) throw Object.assign(new Error('synthetic disk failure'), { code: 'EIO' });
+    return original(path);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  await assert.rejects(storage.discardUpload('io-discard'), code('IO_ERROR'));
+  assert.equal(await readFile(saved.path, 'utf8'), 'private');
+  assert.deepEqual(await storage.lookupUpload('io-discard'), { state: 'no-record' });
+  await assert.rejects(storage.upload('io-discard', bytes('private'), 'file.txt'), code('DISCARDED'));
+  t.mock.restoreAll();
+  syncBuiltinESMExports();
+  await storage.discardUpload('io-discard');
+  assert.deepEqual((await readdir(join(root, 'files', saved.id))).sort(), ['discarded.json', 'identity.json']);
+  await assert.rejects(stat(saved.path), { code: 'ENOENT' });
+});
+
+test('discard uses pinned directories and does not traverse replacement links or metadata body paths', async t => {
+  const { storage, root, parent } = await fixture(t);
+  const outside = join(parent, 'outside');
+  await mkdir(outside, { mode: 0o700 });
+  await writeFile(join(outside, 'body.txt'), 'outside', { mode: 0o600 });
+  const linkedBody = await storage.upload('linked-body-discard', bytes('owned'), 'body.txt');
+  await rm(linkedBody.path);
+  await symlink(join(outside, 'body.txt'), linkedBody.path);
+  await storage.discardUpload('linked-body-discard');
+  const linkedReady = await storage.upload('linked-ready-discard', bytes('owned'), 'body.txt');
+  await rm(dirname(linkedReady.path), { recursive: true });
+  await symlink(outside, dirname(linkedReady.path));
+  await storage.discardUpload('linked-ready-discard');
+  const linkedSlot = await storage.upload('linked-slot-discard', bytes('owned'), 'body.txt');
+  await rename(join(root, 'files', linkedSlot.id), join(parent, 'moved-slot'));
+  await symlink(outside, join(root, 'files', linkedSlot.id));
+  await assert.rejects(storage.discardUpload('linked-slot-discard'), code('IO_ERROR'));
+  const pinned = await storage.upload('pinned-discard', bytes('owned'), 'body.txt');
+  const originalFiles = join(parent, 'original-files');
+  await rename(join(root, 'files'), originalFiles);
+  await symlink(outside, join(root, 'files'));
+  await storage.discardUpload('pinned-discard');
+  await assert.rejects(stat(join(originalFiles, pinned.id, 'ready')), { code: 'ENOENT' });
+  assert.equal(await readFile(join(outside, 'body.txt'), 'utf8'), 'outside');
+});
+
+test('a ready directory replaced during cleanup cannot redirect recursive deletion', async t => {
+  const { storage, parent } = await fixture(t);
+  const saved = await storage.upload('swap-discard', bytes('owned'), 'body.txt');
+  const outside = join(parent, 'outside');
+  await mkdir(outside, { mode: 0o700 });
+  await writeFile(join(outside, 'body.txt'), 'keep outside', { mode: 0o600 });
+  const original = filesystem.readdir;
+  let swapped = false;
+  t.mock.method(filesystem, 'readdir', async (...args: Parameters<typeof original>) => {
+    if (!swapped && String(args[0]).startsWith('/proc/self/fd/')) {
+      swapped = true;
+      await rename(dirname(saved.path), join(parent, 'moved-ready'));
+      await symlink(outside, dirname(saved.path));
+    }
+    return original(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  await assert.rejects(storage.discardUpload('swap-discard'), code('IO_ERROR'));
+  assert.equal(swapped, true);
+  assert.equal(await readFile(join(outside, 'body.txt'), 'utf8'), 'keep outside');
+  t.mock.restoreAll();
+  syncBuiltinESMExports();
+  await storage.discardUpload('swap-discard');
+  assert.equal(await readFile(join(outside, 'body.txt'), 'utf8'), 'keep outside');
+});
+
+test('discard validates operation IDs and does not accept native paths, file IDs or capture identities', async t => {
+  const { storage, parent } = await fixture(t);
+  const saved = await storage.upload('valid-operation', bytes('safe'), 'file.txt');
+  await writeFile(join(parent, 'capture.txt'), 'capture');
+  const capture = await storage.capture('message', './capture.txt', join(parent, 'capture.txt'));
+  for (const value of ['', '../file', saved.path, 'file:///source', saved.id, capture.id, 'bad\0id', 'bad\nid', 'x'.repeat(16385)]) {
+    assert.throws(() => storage.discardUpload(value), code('INVALID_INPUT'));
+  }
+  assert.equal((await read(storage, saved.id)).bytes.toString(), 'safe');
+  assert.equal((await read(storage, capture.id)).bytes.toString(), 'capture');
+  await storage.close();
+  assert.throws(() => storage.discardUpload('valid-operation'), code('CLOSED'));
 });
