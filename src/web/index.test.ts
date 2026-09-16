@@ -465,6 +465,54 @@ test('each selection has its own thumbnail, honest progress, inline failure and 
   frontend.dispose?.();
 });
 
+test('send pending disables upload, picker, ready removal, pending removal and retry until the receipt', async () => {
+  const h = harness();
+  const frontend = await activate(h.context);
+  const draft = new Draft();
+  draft.appendAttachments([{ id: 'restored', value: { type: 'directory', path: '/fixture', displayName: 'Ready' } }]);
+  const composer: ComposerContext = { draft, disabled: false, operation: 'prompt' };
+  frontend.fileInput![0]!.receive([new File(['pending'], 'Uploading')], composer);
+  frontend.fileInput![0]!.receive([new File([new Uint8Array(100_001)], 'Failed')], composer);
+  const render = () => {
+    const action = h.render(frontend.composerActions![0]!.component, composer);
+    const rows = h.render(frontend.composerAbove![0]!.component, composer);
+    return [...descendants(action), ...descendants(rows)];
+  };
+  const unlocked = render();
+  assert.ok(unlocked.some(element => element.props['aria-label'] === '重新上传 Failed'));
+  draft.snapshot = { ...draft.snapshot, pending: true };
+  const locked = render();
+  for (const label of ['添加文件', '选择文件', '移除 Ready', '移除 Uploading', '移除 Failed', '重新上传 Failed']) {
+    assert.equal(locked.find(element => element.props['aria-label'] === label)!.props.disabled, true, label);
+  }
+  draft.snapshot = { ...draft.snapshot, pending: false };
+  for (const element of render().filter(element => element.type === 'button' && /添加文件|移除|重新上传/.test(String(element.props['aria-label'])))) {
+    assert.equal(!!element.props.disabled, false);
+  }
+  assert.ok(unlocked.some(element => element.type === 'input'));
+  h.unmount();
+  frontend.dispose?.();
+});
+
+test('a file picker opened before sending cannot upload its late selection during pending', async () => {
+  const h = harness();
+  const frontend = await activate(h.context);
+  const draft = new Draft();
+  const composer: ComposerContext = { draft, operation: 'prompt', disabled: false };
+  const tree = h.render(frontend.composerActions![0]!.component, composer);
+  const button = descendants(tree).find(element => element.type === 'button')!;
+  const input = descendants(tree).find(element => element.type === 'input')!;
+  (button.props.onClick as () => void)();
+  draft.snapshot = { ...draft.snapshot, pending: true };
+  const target = { files: [new File(['late'], 'late.txt')], value: 'selected' };
+  (input.props.onChange as (event: unknown) => void)({ currentTarget: target });
+  assert.equal(target.value, '');
+  assert.equal(h.calls.length, 0);
+  assert.equal(draft.blocks, 0);
+  assert.match(String(h.errors[0]), /正在提交/);
+  h.unmount();
+  frontend.dispose?.();
+});
 test('selection thumbnail URLs release on view unmount and module stop without cancelling a switched-away draft', async () => {
   const h = harness();
   const frontend = await activate(h.context);
