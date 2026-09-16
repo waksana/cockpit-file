@@ -52,7 +52,7 @@ export interface FileStorage {
   readonly maxBytes: number;
   upload(operationId: string, stream: FileInput, name: string, mime?: string, signal?: AbortSignal): Promise<FileMetadata>;
   discardUpload(operationId: string): Promise<void>;
-  capture(messageKey: string, reference: string, sourcePath: string, signal?: AbortSignal): Promise<FileMetadata>;
+  capture(messageKey: string, reference: string, sourcePath: string | readonly string[], signal?: AbortSignal): Promise<FileMetadata>;
   lookupFile(fileId: string): Promise<FileLookup>;
   lookupUpload(operationId: string): Promise<FileLookup>;
   lookupCapture(messageKey: string, reference: string): Promise<FileLookup>;
@@ -80,6 +80,7 @@ type OperationOwner = { pid: number; operation: string };
 type DiskMetadata = Omit<FileMetadata, 'path'> & { body: string; bodyStamp: BodyStamp; identity: Identity; version: 2 };
 type State = { state: 'pending'; owner: OperationOwner } | { state: 'failed'; error: StoredFailure };
 type Discard = { version: 1; id: string; owner: OperationOwner };
+type CaptureSource = { paths: readonly string[] };
 
 function failure(code: string, message: string, cause?: unknown): FileStorageError {
   return new FileStorageError(code, message, { cause });
@@ -207,9 +208,24 @@ function parseIdentity(value: unknown): Identity {
   throw failure('CORRUPT', 'Invalid stored identity');
 }
 const INLINE_MIMES = new Set([
-  'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif',
+  'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/svg+xml',
   'audio/wav', 'audio/mpeg', 'audio/ogg', 'audio/mp4', 'video/ogg', 'video/mp4', 'video/webm',
 ]);
+function svgPrefix(prefix: Buffer): boolean {
+  let text = prefix.toString('utf8').replace(/^\uFEFF/, '').trimStart();
+  if (/^<\?xml[\t\n\r ]/.test(text)) {
+    const end = text.indexOf('?>');
+    if (end < 0) return false;
+    text = text.slice(end + 2).trimStart();
+  }
+  while (text.startsWith('<!--')) {
+    const end = text.indexOf('-->');
+    if (end < 0) return false;
+    text = text.slice(end + 3).trimStart();
+  }
+  // MIME recognition only: SVG is rendered as an image, never inserted as page markup.
+  return /^<svg(?:[\t\n\r ][^>]*|\/?)>/.test(text);
+}
 function sniff(prefix: Buffer): string {
   if (prefix.length >= 24 && prefix.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) &&
       prefix.toString('ascii', 12, 16) === 'IHDR') return 'image/png';
@@ -239,12 +255,14 @@ function sniff(prefix: Buffer): string {
       ((prefix[2] ?? 0) & 0xf0) !== 0 && ((prefix[2] ?? 0) & 0x0c) !== 0x0c) return 'audio/mpeg';
   if (prefix.length >= 12 && prefix.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])) &&
       prefix.includes(Buffer.from('webm'))) return 'video/webm';
+  if (svgPrefix(prefix)) return 'image/svg+xml';
   return 'application/octet-stream';
 }
 function bodyName(name: string, mime: string): string {
   const canonical: Record<string, string> = {
     'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp',
     'image/avif': '.avif', 'audio/wav': '.wav', 'audio/mpeg': '.mp3', 'audio/ogg': '.ogg',
+    'image/svg+xml': '.svg',
     'audio/mp4': '.m4a', 'video/ogg': '.ogv', 'video/mp4': '.mp4', 'video/webm': '.webm',
   };
   const extension = extname(name).toLowerCase();
@@ -491,7 +509,7 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
       return { handle: result, created };
     } finally { await rm(stagePath, { recursive: true, force: true }); }
   }
-  async function execute(identity: Identity, input: FileInput | string, signal: AbortSignal, owner: OperationOwner): Promise<FileMetadata> {
+  async function execute(identity: Identity, input: FileInput | CaptureSource, signal: AbortSignal, owner: OperationOwner): Promise<FileMetadata> {
     const id = identityId(identity);
     const { handle, created } = await reserve(identity, owner);
     let attempt: FileHandle | undefined;
@@ -551,15 +569,26 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
       try {
         let initial: BigIntStats | undefined;
         let sourceInput: FileInput;
-        if (typeof input === 'string') {
-          try { source = await open(input, constants.O_RDONLY | constants.O_NONBLOCK); }
-          catch (error) {
-            throw failure(hasCode(error, 'ENOENT') ? 'SOURCE_NOT_FOUND' : 'SOURCE_UNREADABLE', 'Cannot open capture source', error);
+        if ('paths' in input) {
+          for (const path of input.paths) {
+            let candidate: FileHandle;
+            try { candidate = await open(path, constants.O_RDONLY | constants.O_NONBLOCK); }
+            catch (error) {
+              if (hasCode(error, 'ENOENT') || hasCode(error, 'ENOTDIR')) continue;
+              throw failure('SOURCE_UNREADABLE', 'Cannot inspect capture source candidates', error);
+            }
+            let selected = false;
+            try {
+              const info = await candidate.stat({ bigint: true });
+              if (!info.isFile()) throw failure('INVALID_SOURCE', 'Capture source must be a regular file');
+              if (source) throw failure('AMBIGUOUS_SOURCE', 'Relative reference exists in both the project and session workspace');
+              source = candidate;
+              initial = info;
+              selected = true;
+            } finally { if (!selected) await candidate.close(); }
           }
-          const stat = await source.stat({ bigint: true });
-          if (!stat.isFile()) throw failure('INVALID_SOURCE', 'Capture source must be a regular file');
-          if (stat.size > BigInt(maxBytes)) throw failure('LIMIT_EXCEEDED', `File exceeds the ${maxBytes}-byte limit`);
-          initial = stat;
+          if (!source || !initial) throw failure('SOURCE_NOT_FOUND', 'Cannot open capture source');
+          if (initial.size > BigInt(maxBytes)) throw failure('LIMIT_EXCEEDED', `File exceeds the ${maxBytes}-byte limit`);
           sourceInput = sourceBytes(source);
         } else sourceInput = input;
         const output = await open(fdPath(payload, 'body'), constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600);
@@ -632,7 +661,7 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
       } finally { await handle.close(); }
     }
   }
-  function schedule(identity: Identity, input: FileInput | string, signal?: AbortSignal): Promise<FileMetadata> {
+  function schedule(identity: Identity, input: FileInput | CaptureSource, signal?: AbortSignal): Promise<FileMetadata> {
     ensureOpen();
     if (Buffer.byteLength(JSON.stringify(identity)) > 60 * 1024) {
       throw failure('INVALID_INPUT', 'Operation identity exceeds its metadata byte limit');
@@ -653,7 +682,7 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
     const promise = execute(identity, input, combined, owner).finally(async () => {
       try {
         if (input instanceof Readable) input.destroy();
-        else if (typeof input !== 'string' && 'cancel' in input && !input.locked) {
+        else if ('cancel' in input && !input.locked) {
           let onAbort = () => {};
           const cancellation = new Promise<void>(resolve => { onAbort = resolve; });
           combined.addEventListener('abort', onAbort, { once: true });
@@ -746,11 +775,15 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
     },
     discardUpload,
     capture(messageKey, reference, sourcePath, signal) {
-      key(sourcePath, 'sourcePath');
-      if (!isAbsolute(sourcePath)) throw failure('INVALID_INPUT', 'Capture source must be an explicitly resolved absolute path');
+      const paths = [...new Set(typeof sourcePath === 'string' ? [sourcePath] : sourcePath)];
+      if (!paths.length || paths.length > 2) throw failure('INVALID_INPUT', 'Capture requires one or two explicit source candidates');
+      for (const path of paths) {
+        key(path, 'sourcePath');
+        if (!isAbsolute(path)) throw failure('INVALID_INPUT', 'Capture source must be an explicitly resolved absolute path');
+      }
       return schedule({
-        kind: 'capture', messageKey: key(messageKey, 'messageKey'), reference: key(reference, 'reference'), name: nameOf(basename(sourcePath)),
-      }, sourcePath, signal);
+        kind: 'capture', messageKey: key(messageKey, 'messageKey'), reference: key(reference, 'reference'), name: nameOf(basename(paths[0]!)),
+      }, { paths }, signal);
     },
     lookupFile,
     lookupUpload(operationId) {

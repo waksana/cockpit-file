@@ -293,7 +293,7 @@ test('missing and truncated stored originals fail without recapturing', async t 
   await assert.rejects(storage.lookupFile(saved.id));
 });
 
-test('MIME comes from bytes, not supplied labels; HTML and SVG never receive active inline types', async t => {
+test('MIME comes from bytes, not supplied labels; HTML never receives an active inline type', async t => {
   const { storage } = await fixture(t);
   const png = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex');
   const media = [
@@ -308,13 +308,39 @@ test('MIME comes from bytes, not supplied labels; HTML and SVG never receive act
     assert.equal(saved.inline, true);
     assert.ok(saved.path.endsWith(item.extension));
   }
-  for (const [index, value] of ['<script>alert(1)</script>', '<svg xmlns="http://www.w3.org/2000/svg"></svg>', 'not an image'].entries()) {
+  for (const [index, value] of ['<script>alert(1)</script>', '<html><svg xmlns="http://www.w3.org/2000/svg"></svg></html>', 'not an image'].entries()) {
     const saved = await storage.upload(`unsafe-${index}`, bytes(value), 'claimed.png', 'image/png');
     assert.equal(saved.mime, 'application/octet-stream');
     assert.equal(saved.inline, false);
   }
 });
 
+test('SVG recognition accepts bounded XML preambles and preserves original bytes for image-mode rendering', async t => {
+  const { storage, parent } = await fixture(t);
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><style>rect{fill:red}</style><rect width="20" height="20"/></svg>';
+  for (const [index, preamble] of ['', '\uFEFF \n', '<?xml version="1.0" encoding="UTF-8"?>\n',
+    '<?xml\nversion="1.0"?>\n', '<!-- drawing -->\n<!-- generated -->\n'].entries()) {
+    const source = preamble + svg;
+    const saved = await storage.upload(`svg-${index}`, bytes(source), 'drawing.txt', 'text/plain');
+    assert.equal(saved.mime, 'image/svg+xml');
+    assert.equal(saved.inline, true);
+    assert.ok(saved.path.endsWith('/body.svg'));
+    assert.equal((await read(storage, saved.id)).bytes.toString(), source);
+  }
+  const file = join(parent, 'drawing.svg');
+  await writeFile(file, svg);
+  const captured = await storage.capture('svg-message', './drawing.svg', file);
+  assert.equal(captured.mime, 'image/svg+xml');
+  assert.equal((await read(storage, captured.id)).bytes.toString(), svg);
+  for (const [index, source] of [
+    '<svg-not-an-image/>', '<html><svg/></html>', '<?xml-stylesheet href="remote.css"?><svg/>',
+    '<!DOCTYPE svg SYSTEM "external.dtd"><svg/>', '<!--' + 'x'.repeat(4096) + '--><svg/>',
+  ].entries()) {
+    const saved = await storage.upload(`not-svg-${index}`, bytes(source), 'claimed.svg', 'image/svg+xml');
+    assert.equal(saved.mime, 'application/octet-stream');
+    assert.equal(saved.inline, false);
+  }
+});
 test('root validation rejects relative, symlinked, and nonprivate directories without chmodding them', async t => {
   const { parent } = await fixture(t);
   await assert.rejects(createFileStorage({ root: 'relative' }), code('INVALID_ROOT'));
@@ -329,6 +355,32 @@ test('root validation rejects relative, symlinked, and nonprivate directories wi
   await assert.rejects(createFileStorage({ root: join(parent, 'invalid'), maxBytes: -1 }), code('INVALID_INPUT'));
 });
 
+test('capture opens only a unique explicit source and records ambiguous candidates as a terminal failure', async t => {
+  const { storage, parent } = await fixture(t);
+  const project = join(parent, 'project.txt');
+  const artifact = join(parent, 'artifact.txt');
+  await writeFile(artifact, 'artifact');
+  const first = await storage.capture('artifact', 'files/file.txt', [project, artifact]);
+  assert.equal((await read(storage, first.id)).bytes.toString(), 'artifact');
+  await writeFile(project, 'project');
+  await assert.rejects(storage.capture('both', 'files/file.txt', [project, artifact]), code('AMBIGUOUS_SOURCE'));
+  const ambiguous = await storage.lookupCapture('both', 'files/file.txt');
+  assert.ok(ambiguous.state === 'failed');
+  assert.equal(ambiguous.error.code, 'AMBIGUOUS_SOURCE');
+  await rm(artifact);
+  await assert.rejects(storage.capture('both', 'files/file.txt', [project, artifact]), code('AMBIGUOUS_SOURCE'));
+  const second = await storage.capture('project', 'files/file.txt', [project, artifact]);
+  assert.equal((await read(storage, second.id)).bytes.toString(), 'project');
+  const duplicate = await storage.capture('same-root', 'files/file.txt', [project, project]);
+  assert.equal((await read(storage, duplicate.id)).bytes.toString(), 'project');
+  await rm(project);
+  await assert.rejects(storage.capture('none', 'files/file.txt', [project, artifact]), code('SOURCE_NOT_FOUND'));
+  await mkdir(project);
+  await writeFile(artifact, 'do not choose past invalid source');
+  await assert.rejects(storage.capture('invalid', 'files/file.txt', [project, artifact]), code('INVALID_SOURCE'));
+  assert.throws(() => storage.capture('empty', 'file', []), code('INVALID_INPUT'));
+  assert.throws(() => storage.capture('many', 'file', [project, artifact, join(parent, 'third')]), code('INVALID_INPUT'));
+});
 test('persisted interrupted captures report a bounded error and cannot be restarted by duplicate references', async t => {
   const { parent, root, storage, reopen } = await fixture(t);
   const source = join(parent, 'missing.txt');

@@ -620,6 +620,35 @@ test('a thumbnail opens an explicitly closable native dialog and a changed resou
   frontend.dispose?.();
 });
 
+test('managed SVG previews reuse image elements for thumbnail and expansion without executing markup', async () => {
+  const h = harness();
+  h.context.request = async (path, init) => {
+    h.calls.push({ path, init });
+    return new Response(null, { headers: { 'content-type': 'image/svg+xml', 'content-length': '200' } });
+  };
+  const frontend = await activate(h.context);
+  const node: RenderNode = {
+    kind: 'image', origin: { sessionId: 'fixture', messageId: 'svg' },
+    target: 'files/diagram.svg', label: 'Diagram',
+  };
+  const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+  render(); h.flushEffects(); await settle();
+  let tree = render();
+  const image = descendants(tree).find(element => element.type === 'img')!;
+  assert.match(String(image.props.src), /\/messages\//);
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0]!.init?.method, 'HEAD');
+  (image.props.onLoad as () => void)();
+  (descendants(tree).find(element => element.props['aria-label'] === '查看 Diagram')!.props.onClick as () => void)();
+  tree = render();
+  const expanded = descendants(tree).filter(element => element.type === 'img');
+  assert.equal(expanded.length, 2);
+  assert.equal(expanded[0]!.props.src, expanded[1]!.props.src);
+  assert.equal(descendants(tree).some(element => ['iframe', 'object', 'embed'].includes(String(element.type))), false);
+  assert.doesNotMatch(source, /dangerouslySetInnerHTML|innerHTML\s*=/);
+  h.unmount();
+  frontend.dispose?.();
+});
 test('audio/video controls stay behind an explicit play action and unsafe document types stay download-only', async () => {
   for (const mimeType of ['audio/wav', 'video/mp4', 'application/pdf', 'text/html']) {
     const h = harness();

@@ -1,5 +1,5 @@
 import { createHash, type Hash } from 'node:crypto';
-import { basename, isAbsolute, resolve } from 'node:path';
+import { basename, isAbsolute, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type {
   ActivateBackend, ModuleBackendContext, ModuleRequest, ModuleResponse, NativeObservation,
@@ -13,6 +13,7 @@ interface MessageState {
   sessionId: string;
   messageId: string;
   cwd: string | null;
+  workspacePath?: string | null;
   owner: string;
   scanner: MarkdownScanner;
   hash: Hash;
@@ -20,6 +21,7 @@ interface MessageState {
   targets: Set<string>;
   touched: number;
   diagnosticsSeen: number;
+  deferred: Map<string, string | null>;
 }
 
 function integer(config: Readonly<Record<string, unknown>>, key: string, fallback: number, maximum: number): number {
@@ -42,15 +44,24 @@ function binary(value: unknown): value is AsyncIterable<Uint8Array> {
     && Symbol.asyncIterator in value && typeof value[Symbol.asyncIterator] === 'function';
 }
 
-function sourcePath(reference: string, cwd: string | null): string {
+function sourcePaths(reference: string, cwd: string | null, workspacePath: string | null | undefined): string[] | undefined {
   if (!isLocalFileReference(reference)) throw new Error('Only local file references can be captured');
-  if (reference.startsWith('file:')) return fileURLToPath(new URL(reference));
+  if (/^file:/i.test(reference)) return [fileURLToPath(new URL(reference))];
   const target = reference.split(/[?#]/, 1)[0]!;
   const decoded = decodeURIComponent(target.replace(/%(?![\da-fA-F]{2})/g, '%25'));
   if (/[\0-\x1f\x7f]/.test(decoded)) throw new Error('Invalid local file path');
-  if (isAbsolute(decoded)) return resolve(decoded);
+  if (isAbsolute(decoded)) return [resolve(decoded)];
   if (!cwd || !isAbsolute(cwd)) throw new Error('Relative file reference has no native working directory');
-  return resolve(cwd, decoded);
+  const relative = normalize(decoded);
+  const paths = [resolve(cwd, relative)];
+  if (!relative.startsWith(`files${sep}`)) return paths;
+  // Unknown context is not evidence that a second candidate cannot exist.
+  if (workspacePath === undefined) return;
+  if (workspacePath !== null) {
+    if (!isAbsolute(workspacePath) || /[\0-\x1f\x7f]/.test(workspacePath)) throw new Error('Invalid native workspace path');
+    paths.push(resolve(workspacePath, relative));
+  }
+  return [...new Set(paths)];
 }
 
 function errorResponse(error: unknown): ModuleResponse {
@@ -72,7 +83,9 @@ function fileHeaders(file: FileMetadata, download: boolean): Record<string, stri
     'Content-Length': String(file.size),
     'Content-Disposition': `${download || !file.inline ? 'attachment' : 'inline'}; filename*=UTF-8''${name}`,
     'X-Content-Type-Options': 'nosniff',
-    'Content-Security-Policy': "sandbox; default-src 'none'",
+    'Content-Security-Policy': file.mime === 'image/svg+xml'
+      ? "sandbox; default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+      : "sandbox; default-src 'none'",
     'Cache-Control': 'private, max-age=31536000, immutable',
     'Accept-Ranges': 'bytes',
     ETag: `"${file.sha256}"`,
@@ -112,33 +125,42 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
   let closing: Promise<void> | undefined;
   const scanner = () => createMarkdownScanner({ maxCandidateChars, maxReferences });
   const report = (error: unknown) => context.report(error);
+  const captureReference = (state: MessageState, target: string, cwd: string | null) => {
+    let paths: string[] | undefined;
+    try { paths = sourcePaths(target, cwd, state.workspacePath); }
+    catch (error) { report(error); return; }
+    if (!paths) { state.deferred.set(target, cwd); return; }
+    const captureKey = JSON.stringify([state.sessionId, state.messageId, target]);
+    if (captures.has(captureKey)) return;
+    captures.add(captureKey);
+    void work.run(() => storage.capture(keyOf(state.sessionId, state.messageId), target, paths, context.signal))
+      .catch(report).finally(() => { captures.delete(captureKey); });
+  };
   const capture = (state: MessageState, references: MarkdownReference[]) => {
     for (const { target } of references) {
       if (disposed || state.targets.has(target) || !isLocalFileReference(target)) continue;
       if (state.targets.size >= maxReferences) { report(new Error('File reference limit reached')); break; }
       state.targets.add(target);
-      let path: string;
-      try { path = sourcePath(target, state.cwd); }
-      catch (error) { report(error); continue; }
-      const captureKey = JSON.stringify([state.sessionId, state.messageId, target]);
-      if (captures.has(captureKey)) continue;
-      captures.add(captureKey);
-      void work.run(() => storage.capture(keyOf(state.sessionId, state.messageId), target, path, context.signal))
-        .catch(report).finally(() => { captures.delete(captureKey); });
+      captureReference(state, target, state.cwd);
     }
   };
-  const observe = ({ sessionId, cwd, event }: NativeObservation) => {
+  const finish = (state: MessageState) => {
+    state.scanner.finish();
+    if (state.deferred.size) report(new Error('Native workspace context unavailable; relative artifact references were not captured'));
+    state.deferred.clear();
+  };
+  const observe = ({ sessionId, cwd, workspacePath, event }: NativeObservation) => {
     if (disposed) return;
     const data = event.data;
     if (event.type === 'session.shutdown') {
-      for (const [key, state] of messages) if (state.sessionId === sessionId) { state.scanner.finish(); messages.delete(key); }
+      for (const [key, state] of messages) if (state.sessionId === sessionId) { finish(state); messages.delete(key); }
       return;
     }
     const owner = event.agentId ?? event.parentToolCallId
       ?? (typeof data.agentId === 'string' ? data.agentId : typeof data.parentToolCallId === 'string' ? data.parentToolCallId : '');
     if (event.type === 'abort' || event.type === 'assistant.turn_end') {
       for (const [key, state] of messages) if (state.sessionId === sessionId && state.owner === owner) {
-        state.scanner.finish(); messages.delete(key);
+        finish(state); messages.delete(key);
       }
       return;
     }
@@ -149,13 +171,20 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
     const streaming = event.type === 'assistant.message_start' || event.type === 'assistant.message_delta';
     if (!state && streaming && event.ephemeral === true) {
       if (messages.size >= maxActiveMessages) { report(new Error('Active file scanner limit reached')); return; }
-      state = { sessionId, messageId, cwd, owner, scanner: scanner(),
-        hash: createHash('sha256'), length: 0, targets: new Set(), touched: Date.now(), diagnosticsSeen: 0 };
+      state = { sessionId, messageId, cwd, workspacePath, owner, scanner: scanner(),
+        hash: createHash('sha256'), length: 0, targets: new Set(), deferred: new Map(), touched: Date.now(), diagnosticsSeen: 0 };
       messages.set(key, state);
     }
     // A complete event without a new stream is not evidence of a new message.
     if (!state) return;
     state.cwd = cwd;
+    if (workspacePath !== undefined) {
+      state.workspacePath = workspacePath;
+      for (const [target, originalCwd] of state.deferred) {
+        state.deferred.delete(target);
+        captureReference(state, target, originalCwd);
+      }
+    }
     state.touched = Date.now();
     if (event.type === 'assistant.message_delta' && typeof data.deltaContent === 'string') {
       state.hash.update(data.deltaContent);
@@ -172,7 +201,7 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
         for (const diagnostic of correction.diagnostics) report(new Error(diagnostic.message));
         correction.finish();
       }
-      state.scanner.finish();
+      finish(state);
       messages.delete(key);
     }
     const diagnostics = state.scanner.diagnostics;
@@ -182,7 +211,7 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
   const expire = setInterval(() => {
     const cutoff = Date.now() - 5 * 60_000;
     for (const [key, state] of messages) if (state.touched < cutoff) {
-      state.scanner.finish(); messages.delete(key);
+      finish(state); messages.delete(key);
       report(new Error('Inactive file scanner released without historical catch-up'));
     }
   }, 60_000);
@@ -191,7 +220,7 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
     if (disposed) return closing;
     disposed = true;
     clearInterval(expire);
-    for (const state of messages.values()) state.scanner.finish();
+    for (const state of messages.values()) finish(state);
     messages.clear();
     work.dispose();
     context.signal.removeEventListener('abort', dispose);
