@@ -391,27 +391,18 @@ test('concurrent upload retries do not create an unbounded in-memory queue', asy
   assert.equal((await read(storage, saved.id)).bytes.toString(), 'new explicit retry');
 });
 
-test('separate storage instances cannot overwrite a pending operation or capture a replay', async t => {
+test('separate storage instances cannot overwrite a pending operation or capture a replay', { timeout: 5000 }, async t => {
   const { parent, root, storage, reopen } = await fixture(t);
   const peer = await reopen();
   const abort = new AbortController();
-  const pending = storage.upload('cross-instance', new Readable({ read() {} }), 'same.txt', undefined, abort.signal);
+  const reading = gate();
+  const pending = storage.upload('cross-instance', new Readable({ read() { reading.resolve(); } }), 'same.txt', undefined, abort.signal);
   const checked = assert.rejects(pending, code('ABORTED'));
-  let registered = false;
-  for (let i = 0; i < 1000; i++) {
-    const state = await peer.lookupUpload('cross-instance');
-    if (state.state === 'pending') {
-      try {
-        await stat(join(root, 'files', state.fileId, 'attempt'));
-        registered = true;
-        break;
-      } catch (error) {
-        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-      }
-    }
-    await new Promise<void>(resolve => setImmediate(resolve));
-  }
-  assert.equal(registered, true);
+  await reading.promise;
+  const state = await peer.lookupUpload('cross-instance');
+  assert.equal(state.state, 'pending');
+  assert.ok(state.state === 'pending');
+  assert.equal((await stat(join(root, 'files', state.fileId, 'attempt'))).isDirectory(), true);
   await assert.rejects(peer.upload('cross-instance', bytes('other'), 'same.txt'), code('PENDING'));
   abort.abort();
   await checked;
