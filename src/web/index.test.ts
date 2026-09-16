@@ -659,8 +659,8 @@ test('compact styles are module-scoped, wrap multiple files and constrain long f
   const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.cf-upload-button\s*\{[^}]*width:\s*2\.5rem;[^}]*height:\s*2\.5rem;[^}]*border:\s*0;[^}]*border-radius:\s*50%;[^}]*background:\s*transparent;/s);
   assert.match(css, /box-shadow:\s*inset 0 0 0 1px/);
-  assert.match(css, /\.cf-card\s*\{[^}]*grid-template-columns:\s*3rem minmax\(0, 1fr\) 4rem;[^}]*width:\s*17\.5rem;[^}]*max-width:\s*100%;[^}]*height:\s*4\.5rem;/s);
-  assert.match(css, /\.cf-attachment\s*\{[^}]*flex:\s*0 0 auto;[^}]*width:\s*17\.5rem;/s);
+  assert.match(css, /\.cf-card\s*\{[^}]*grid-template-columns:\s*3rem minmax\(0, 1fr\) 4rem;[^}]*width:\s*min\(17\.5rem, 75vw\);[^}]*max-width:\s*100%;[^}]*height:\s*4\.5rem;/s);
+  assert.match(css, /\.cf-attachment\s*\{[^}]*flex:\s*0 0 auto;[^}]*width:\s*min\(17\.5rem, 75vw\);/s);
   assert.match(css, /\.cf-thumbnail\s*\{[^}]*width:\s*3rem;[^}]*height:\s*3rem;/s);
   assert.match(css, /\.cf-thumbnail\s*\{[^}]*grid-template:\s*minmax\(0, 1fr\) \/ minmax\(0, 1fr\);/s);
   assert.match(css, /\.cf-name-stem\s*\{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/s);
