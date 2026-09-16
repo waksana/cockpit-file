@@ -662,6 +662,7 @@ test('compact styles are module-scoped, wrap multiple files and constrain long f
   assert.match(css, /\.cf-card\s*\{[^}]*grid-template-columns:\s*3rem minmax\(0, 1fr\) 4rem;[^}]*width:\s*17\.5rem;[^}]*max-width:\s*100%;[^}]*height:\s*4\.5rem;/s);
   assert.match(css, /\.cf-attachment\s*\{[^}]*flex:\s*0 0 auto;[^}]*width:\s*17\.5rem;/s);
   assert.match(css, /\.cf-thumbnail\s*\{[^}]*width:\s*3rem;[^}]*height:\s*3rem;/s);
+  assert.match(css, /\.cf-thumbnail\s*\{[^}]*grid-template:\s*minmax\(0, 1fr\) \/ minmax\(0, 1fr\);/s);
   assert.match(css, /\.cf-name-stem\s*\{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/s);
   assert.match(css, /\.cf-name-extension\s*\{[^}]*max-width:\s*45%;/s);
   assert.match(css, /\.cf-card-details\s*\{[^}]*grid-template-rows:\s*1\.25rem 1\.125rem 0\.25rem;/s);

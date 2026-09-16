@@ -63,7 +63,7 @@ export const activate: ActivateFrontend = context => {
       >
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"
           strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-          <path d="m9 13 6-6a2.5 2.5 0 0 1 3.5 3.5l-8 8a4.5 4.5 0 0 1-6.4-6.4l8-8" />
+          <path d="m10.1 13 6-6a2.5 2.5 0 0 1 3.5 3.5l-8 8a4.5 4.5 0 0 1-6.4-6.4l8-8" />
         </svg>
       </button>
       <input
