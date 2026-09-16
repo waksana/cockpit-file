@@ -35,6 +35,15 @@ export const activate: ActivateFrontend = context => {
     );
   }
 
+  function ActionIcon({ name }: { name: 'remove' | 'download' | 'retry' }) {
+    return <svg className="cf-action-icon" width="18" height="18" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <path d={name === 'remove' ? 'm7 7 10 10M17 7 7 17'
+        : name === 'download' ? 'M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4'
+          : 'M19 8a8 8 0 1 0 1 8M20 3v6h-6'} />
+    </svg>;
+  }
+
   function UploadAction(composer: ComposerContext) {
     const input = React.useRef<HTMLInputElement>(null);
     const selectionContext = React.useRef<ComposerContext | null>(null);
@@ -52,8 +61,9 @@ export const activate: ActivateFrontend = context => {
           input.current?.click();
         }}
       >
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-          <path d="m8 13 7-7a3 3 0 0 1 4 4l-9 9a5 5 0 0 1-7-7l9-9a7 7 0 0 1 10 10l-9 9" />
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"
+          strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+          <path d="m10.1 13 6-6a2.5 2.5 0 0 1 3.5 3.5l-8 8a4.5 4.5 0 0 1-6.4-6.4l8-8" />
         </svg>
       </button>
       <input
@@ -81,26 +91,25 @@ export const activate: ActivateFrontend = context => {
       {(ready.length > 0 || pending.items.length > 0) && <ul className="cf-attachment-list">
         {ready.map(item => {
           const name = item.value.displayName || '附件';
-          const actions = <button type="button" className="cf-button" disabled={disabled}
-            onClick={() => uploads.removeAttachment(composer.draft, item.id)} aria-label={`移除 ${name}`}>移除</button>;
+          const actions = <button type="button" className="cf-icon-button" disabled={disabled} title="移除"
+            onClick={() => uploads.removeAttachment(composer.draft, item.id)} aria-label={`移除 ${name}`}><ActionIcon name="remove" /></button>;
+          const status = draft.pending ? '正在提交' : '准备就绪';
           const url = item.value.type === 'file' ? nativeFileUrl(item.value.path, nativePathPrefix, context.apiBase) : null;
           return <li className="cf-attachment" key={item.id}>
-            {url ? <FileCard url={url} name={name} actions={actions} status="准备就绪" download={false} />
+            {url ? <FileCard url={url} name={name} actions={actions} status={status} download={false} />
               : item.value.type === 'blob'
-                ? <BlobCard attachment={item.value} name={name} actions={actions} status="准备就绪" download={false} />
-                : <FileTile name={name} status="准备就绪" actions={actions} />}
+                ? <BlobCard attachment={item.value} name={name} actions={actions} status={status} download={false} />
+                : <FileTile name={name} status={status} actions={actions} />}
           </li>;
         })}
         {pending.items.map(item => {
-          const actions = <>
-            {item.status === 'failed' && <button type="button" className="cf-button"
-              disabled={disabled || composer.operation !== 'prompt'}
-              onClick={() => uploads.retry(composer.draft, item.id)} aria-label={`重新上传 ${item.name}`}>重试</button>}
-            <button type="button" className="cf-button" disabled={disabled} onClick={() => uploads.remove(composer.draft, item.id)}
-              aria-label={`移除 ${item.name}`}>移除</button>
-          </>;
+          const retry = item.status === 'failed' ? <button type="button" className="cf-icon-button" title="重试上传"
+            disabled={disabled || composer.operation !== 'prompt'}
+            onClick={() => uploads.retry(composer.draft, item.id)} aria-label={`重新上传 ${item.name}`}><ActionIcon name="retry" /></button> : undefined;
+          const actions = <button type="button" className="cf-icon-button" disabled={disabled} title="移除"
+            onClick={() => uploads.remove(composer.draft, item.id)} aria-label={`移除 ${item.name}`}><ActionIcon name="remove" /></button>;
           const props = {
-            name: item.name, actions, download: false, error: item.error,
+            name: item.name, actions, retry, download: false, error: item.error,
             busy: item.status === 'uploading',
             status: item.status === 'uploading' ? '上传中' : item.status === 'ready' ? '已上传，等待加入草稿' : '上传未完成',
           };
@@ -108,7 +117,7 @@ export const activate: ActivateFrontend = context => {
             {item.url ? <FileCard {...props} url={item.url} />
               : item.file && previewKind(item.file.type) === 'image'
                 ? <BlobCard {...props} file={item.file} />
-                : <FileTile {...props} metadata={formatBytes(item.size)} />}
+                : <FileTile {...props} actions={<>{retry}{actions}</>} metadata={formatBytes(item.size)} />}
           </li>;
         })}
       </ul>}
@@ -118,6 +127,7 @@ export const activate: ActivateFrontend = context => {
   interface CardProps {
     name: string;
     actions?: ReactNode;
+    retry?: ReactNode;
     status?: string;
     error?: string;
     busy?: boolean;
@@ -138,7 +148,13 @@ export const activate: ActivateFrontend = context => {
   }) {
     const [expanded, setExpanded] = React.useState<string>();
     const dialog = React.useRef<HTMLDialogElement>(null);
-    const open = preview !== undefined && expanded === preview.key;
+    const detailsKey = `details:${name}`;
+    const detailsOpen = expanded === detailsKey;
+    const open = detailsOpen || (preview !== undefined && expanded === preview.key);
+    const suffix = /(?:\.tar\.(?:gz|bz2|xz|zst)|\.[a-z0-9]{1,10})$/i.exec(name);
+    const extension = suffix && suffix.index > 0 ? suffix[0] : '';
+    const stem = extension ? name.slice(0, -extension.length) : name;
+    const information = [status, metadata].filter(Boolean).join(' · ');
     React.useEffect(() => {
       if (!open) return;
       const element = dialog.current;
@@ -160,31 +176,38 @@ export const activate: ActivateFrontend = context => {
     return <span className="cf-card" role="group" aria-label={name} aria-busy={busy}>
       {preview ? <button type="button" className="cf-thumbnail cf-preview-button"
         aria-label={`${preview.kind === 'image' ? '查看' : '播放'} ${name}`} aria-haspopup="dialog"
-        onClick={() => setExpanded(preview.key)}>
+        title={preview.kind === 'image' ? '查看图片' : '播放媒体'} onClick={() => setExpanded(preview.key)}>
         {media}
         {preview.kind !== 'image' && <span className="cf-play" aria-hidden="true">▶</span>}
       </button> : <span className="cf-thumbnail" aria-hidden="true">{icon}</span>}
       <span className="cf-card-details">
-        <span className="cf-card-name" title={name}>{name}</span>
-        {(status || metadata) && <span className="cf-status" role={busy ? 'status' : undefined}>
-          {status}{status && metadata && ' · '}{metadata}
-        </span>}
-        {busy && <progress className="cf-progress" aria-label={`${name}：${status || '文件加载中'}`} />}
-        {error && <span className="cf-error" role="alert">{error}</span>}
-        {actions && <span className="cf-card-actions">{actions}</span>}
+        <button type="button" className="cf-card-name" title={name} aria-label={`文件详情：${name}`} aria-haspopup="dialog"
+          onClick={() => setExpanded(detailsKey)}>
+          <span className="cf-name-stem" dir="auto">{stem}</span>{extension && <bdi className="cf-name-extension">{extension}</bdi>}
+        </button>
+        {error ? <button type="button" className="cf-card-status cf-error" title={error} aria-label={`查看文件错误：${error}`}
+          aria-haspopup="dialog" onClick={() => setExpanded(detailsKey)}><span role="alert">文件异常 · 查看原因</span></button>
+          : <span className="cf-card-status" title={information} role={busy ? 'status' : undefined}>{information}</span>}
+        <span className="cf-progress-slot">
+          {busy && <progress className="cf-progress" aria-label={`${name}：${status || '文件加载中'}`} />}
+        </span>
       </span>
-      {open && preview && <dialog ref={dialog} className="cf-preview-dialog" aria-label={`预览 ${name}`}
+      <span className="cf-card-actions">{actions}</span>
+      {open && <dialog ref={dialog} className="cf-preview-dialog" aria-label={`${detailsOpen ? '文件详情' : '预览'} ${name}`}
         onClose={() => setExpanded(undefined)}>
         <span className="cf-dialog-header">
-          <span className="cf-card-name">{name}</span>
+          <span className="cf-dialog-name" dir="auto">{name}</span>
           <button type="button" className="cf-button" autoFocus onClick={() => dialog.current?.close()}>关闭预览</button>
         </span>
-        {preview.kind === 'image' ? <img className="cf-expanded-media" src={preview.url} alt={name}
+        {detailsOpen ? <div className="cf-file-information">
+          {information && <p>{information}</p>}
+          {error && <p className="cf-error">{error}</p>}
+        </div> : preview?.kind === 'image' ? <img className="cf-expanded-media" src={preview.url} alt={name}
           onLoad={preview.ready} onError={preview.failed} />
-          : preview.kind === 'video' ? <video className="cf-expanded-media" src={preview.url} aria-label={name} controls preload="metadata"
+          : preview?.kind === 'video' ? <video className="cf-expanded-media" src={preview.url} aria-label={name} controls preload="metadata"
             onLoadedMetadata={preview.ready} onError={preview.failed} />
-            : <audio className="cf-expanded-media" src={preview.url} aria-label={name} controls preload="metadata"
-              onLoadedMetadata={preview.ready} onError={preview.failed} />}
+            : preview?.kind === 'audio' ? <audio className="cf-expanded-media" src={preview.url} aria-label={name} controls preload="metadata"
+              onLoadedMetadata={preview.ready} onError={preview.failed} /> : null}
       </dialog>}
     </span>;
   }
@@ -202,7 +225,7 @@ export const activate: ActivateFrontend = context => {
     }
   }
 
-  function FileCard({ url, name, actions, status, busy, error, download = true }: CardProps & { url: string }) {
+  function FileCard({ url, name, actions, retry, status, busy, error, download = true }: CardProps & { url: string }) {
     const state = React.useSyncExternalStore(
       React.useCallback(listener => probes.subscribe(url, listener), [url]),
       React.useCallback(() => probes.snapshot(url), [url]),
@@ -219,9 +242,11 @@ export const activate: ActivateFrontend = context => {
         url, key: `${url}:${state.round}`, kind, loading: state.preview === 'pending', ready: mediaReady, failed: mediaFailed,
       } : undefined}
       actions={<>
-        {download && state.status === 'ready' && <a className="cf-download" href={`${url}?download=1`} download={name}>下载</a>}
-        {(state.status === 'unavailable' || state.preview === 'failed') &&
-          <button type="button" className="cf-button" onClick={() => probes.retry(url)} aria-label={`重新加载 ${name}`}>重试预览</button>}
+        {retry ?? ((state.status === 'unavailable' || state.preview === 'failed') &&
+          <button type="button" className="cf-icon-button" title="重试预览" onClick={() => probes.retry(url)}
+            aria-label={`重新加载 ${name}`}><ActionIcon name="retry" /></button>)}
+        {download && state.status === 'ready' && <a className="cf-download cf-icon-button" href={`${url}?download=1`} download={name}
+          title="下载" aria-label={`下载 ${name}`}><ActionIcon name="download" /></a>}
         {actions}
       </>} />;
   }
@@ -234,7 +259,7 @@ export const activate: ActivateFrontend = context => {
     preview: 'pending' | 'ready' | 'failed';
   } & ({ url: string; size: number; mime: string; error?: string } | { url?: undefined; error: string });
 
-  function BlobCard({ attachment, file, name, actions, status, busy, error: uploadError, download = true }: CardProps & {
+  function BlobCard({ attachment, file, name, actions, retry, status, busy, error: uploadError, download = true }: CardProps & {
     attachment?: NativeBlob; file?: File;
   }) {
     const [state, setState] = React.useState<BlobState>();
@@ -294,10 +319,11 @@ export const activate: ActivateFrontend = context => {
         url: resource.url, key: resource.url, kind, loading, ready: () => mediaResult(true), failed: () => mediaResult(false),
       } : undefined}
       actions={<>
-        {download && resource && <a className="cf-download" href={resource.url} download={name}>下载</a>}
-        {resource?.preview === 'failed' &&
-          <button type="button" className="cf-button" onClick={() => setRound(value => value + 1)}
-            aria-label={`重新加载 ${name}`}>重试预览</button>}
+        {retry ?? (resource?.preview === 'failed' &&
+          <button type="button" className="cf-icon-button" title="重试预览" onClick={() => setRound(value => value + 1)}
+            aria-label={`重新加载 ${name}`}><ActionIcon name="retry" /></button>)}
+        {download && resource && <a className="cf-download cf-icon-button" href={resource.url} download={name}
+          title="下载" aria-label={`下载 ${name}`}><ActionIcon name="download" /></a>}
         {actions}
       </>} />;
   }

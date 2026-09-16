@@ -19,9 +19,9 @@ Agent 可以照常使用 Markdown 引用文件，不需要学习额外的发送�
 
 ## 当前状态
 
-**当前版本为 0.1.1。**
+**当前开发版本为 0.1.2，已发布版本为 0.1.1。**
 需要支持 Module API v1 的 Cockpit 0.2.0；已发布的 Cockpit v0.1.0 不支持此模块。
-0.1.1 需要已合入的 [waksana/cockpit#7](https://github.com/waksana/cockpit/pull/7) 输入区配套调整；
+需要已合入的 [waksana/cockpit#7](https://github.com/waksana/cockpit/pull/7) 输入区配套调整；
 准确的构建基线见[安装指南](docs/installation.md)。
 
 从 [Releases](https://github.com/waksana/cockpit-file/releases) 下载 `.tgz` 模块安装包和校验文件，
