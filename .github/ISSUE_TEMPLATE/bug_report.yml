@@ -1,0 +1,32 @@
+name: Bug report / 问题报告
+description: Report a reproducible file-module problem with synthetic data.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: Do not upload personal files, credentials, native homes or real conversation histories.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Versions and environment / 版本与环境
+      description: Module version/SHA, host version/SHA, SDK pin, Node version, OS/architecture, and install method.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Synthetic reproduction / 合成复现
+      description: Small steps and safe sample data; include whether the problem involves upload, capture, cards or downloads.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior / 预期与实际
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics / 脱敏信息
+      description: Relevant errors only. Do not paste complete environment variables or private file contents.

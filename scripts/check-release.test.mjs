@@ -1,0 +1,39 @@
+import assert from 'node:assert/strict';
+import { writeFile, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { releaseFixture } from './test-support/release-fixture.mjs';
+import { packageModule } from './package.mjs';
+import { checkRelease, checkTagTarget } from './check-release.mjs';
+import { verifyPackage } from './verify-package.mjs';
+
+test('release checks bind version, source, checksum and the pinned SDK', async t => {
+  const f = await releaseFixture(t);
+  const archive = await packageModule(f.root, f.output);
+  const result = await checkRelease(f.root, 'v0.1.0', f.sha, f.output);
+  assert.deepEqual(result.sdk, f.pin);
+  await assert.rejects(checkRelease(f.root, 'latest', f.sha, f.output));
+  await assert.rejects(checkRelease(f.root, 'v0.2.0', f.sha, f.output));
+  await assert.rejects(verifyPackage(f.root, archive, 'b'.repeat(40)));
+  await writeFile(join(f.root, 'tooling/host-sdk.json'), JSON.stringify({ ...f.pin, commit: 'b'.repeat(40) }));
+  await assert.rejects(verifyPackage(f.root, archive, f.sha), /different host SDK/);
+});
+
+test('release refuses corrupted downloads and mismatched release notes', async t => {
+  const f = await releaseFixture(t);
+  const archive = await packageModule(f.root, f.output);
+  const checksum = await readFile(`${archive}.sha256`);
+  await writeFile(`${archive}.sha256`, `${'0'.repeat(64)}  cockpit-file-0.1.0.tgz\n`);
+  await assert.rejects(checkRelease(f.root, 'v0.1.0', f.sha, f.output));
+  await writeFile(`${archive}.sha256`, checksum);
+  await writeFile(join(f.root, 'docs/release-notes.md'), '# Cockpit File 9.9.9\n');
+  await assert.rejects(checkRelease(f.root, 'v0.1.0', f.sha, f.output));
+});
+
+test('lightweight and annotated remote tags must still identify the checked commit', () => {
+  const sha = 'a'.repeat(40);
+  checkTagTarget('v0.1.0', sha, `${sha}\trefs/tags/v0.1.0`);
+  checkTagTarget('v0.1.0', sha, `${'b'.repeat(40)}\trefs/tags/v0.1.0\n${sha}\trefs/tags/v0.1.0^{}`);
+  assert.throws(() => checkTagTarget('v0.1.0', sha, `${'b'.repeat(40)}\trefs/tags/v0.1.0`), /moved/);
+  assert.throws(() => checkTagTarget('v0.1.0', sha, ''));
+});

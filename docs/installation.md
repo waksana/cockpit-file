@@ -19,20 +19,26 @@
 
 ## 2. 导出宿主 SDK 并构建模块
 
-在 Cockpit 的源码或支持该命令的运行包根目录导出真实类型：
+构建固定使用 `tooling/host-sdk.json` 中的宿主提交，不跟随 moving main。
+在本仓库根准备独立源码目录（已经有该提交的干净 checkout 时可以跳过 clone）：
 
 ```sh
-node scripts/export-module-api.mjs /absolute/path/cockpit-file/.cockpit-sdk
+HOST_SHA="$(node --input-type=module -e "import { loadSdkPin } from './scripts/build-identity.mjs'; console.log((await loadSdkPin(process.cwd())).commit)")" &&
+git clone --no-checkout --depth 1 https://github.com/waksana/cockpit.git .host-sdk-source &&
+git -C .host-sdk-source fetch --no-tags --depth 1 origin "$HOST_SHA" &&
+git -C .host-sdk-source switch --detach FETCH_HEAD &&
+node scripts/sdk.mjs prepare .host-sdk-source
 ```
 
-目标目录必须尚不存在。它是构建用的公共 SDK 副本，不是运行依赖借用，
-也不包含原生 home、凭据或会话数据。更换 SDK 时只替换自己生成的目录，
-不要复制另一个运行实例的 node_modules。
+准备脚本核对宿主提交和版本，再调用其类型导出器，生成 `.cockpit-sdk` 及来源记录。
+已有 SDK 仅在字节一致时复用；不一致会明确失败，不能混用类型。
+也可 `pnpm sdk:prepare /absolute/clean/pinned/host-source` 使用已有的干净固定源码。
+不要复制运行实例的 node_modules、原生 home 或凭据。
 
 在 `cockpit-file` 仓库根执行：
 
 ```sh
-pnpm install --frozen-lockfile &&
+pnpm install --frozen-lockfile --ignore-scripts &&
 pnpm test &&
 pnpm typecheck &&
 pnpm build &&
@@ -47,8 +53,10 @@ module-output/cockpit-file-0.1.0.tgz.sha256
 ```
 
 输出目录必须不存在，也可以 `pnpm package /absolute/new/output` 指定新目录。
-包只包含 manifest、编译后的 dist 和 LICENSE；React 由宿主注入，
+打包要求干净的已提交源码；修改后先提交再重新 build，不能复用旧构建凭据。
+包包含 manifest、编译后的 dist、LICENSE 和 `module-build.json` 来源清单；React 由宿主注入，
 后端运行代码只使用 Node 标准库。`.cockpit-sdk` 和开发依赖不随模块包交付。
+正式 `.tgz` Release 的流程见[CI 与版本发行](releases.md)。
 
 ## 3. 安装与启用
 

@@ -25,10 +25,12 @@ Agent 可以照常使用 Markdown 引用文件，不需要学习额外的发送�
 未合并前不要假定 Cockpit main 已具备这些接口。
 
 按[本地构建与安装](docs/installation.md)使用，或从[完整文档](docs/README.md)了解流程、分工和限制。
+正式发行时，模块安装包从 [Releases](https://github.com/waksana/cockpit-file/releases) 获取。
 
 ## 参与讨论
 
 欢迎通过 [Issues](https://github.com/waksana/cockpit-file/issues)讨论使用体验和实现方案。
 示例请使用合成文件，不提交真实聊天记录、账号凭据或私人文件。
+参与修改请阅读[贡献指南](CONTRIBUTING.md)；安全问题通过[私密渠道](SECURITY.md)报告。
 
 本项目使用 [GPL-3.0-only](LICENSE)。

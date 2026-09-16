@@ -1,0 +1,71 @@
+name: CI
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Required checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: .node-version
+      - id: sdk
+        name: Read pinned SDK identity
+        run: node scripts/sdk.mjs info >> "$GITHUB_OUTPUT"
+      - name: Check out the fixed host SDK
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: ${{ steps.sdk.outputs.repository }}
+          ref: ${{ steps.sdk.outputs.commit }}
+          path: .host-sdk-source
+          fetch-depth: 1
+          persist-credentials: false
+      - run: node scripts/sdk.mjs prepare .host-sdk-source
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm package
+      - name: Verify the exact module archive
+        env:
+          ARCHIVE: ${{ steps.sdk.outputs.archive }}
+        run: node scripts/verify-package.mjs "module-output/$ARCHIVE" "$GITHUB_SHA"
+      - name: Install isolated host test dependencies
+        run: pnpm --dir .host-sdk-source install --frozen-lockfile --ignore-scripts
+      - name: Exercise the packaged module through the pinned host
+        env:
+          COCKPIT_FILE_MODULE_ARCHIVE: ${{ github.workspace }}/module-output/${{ steps.sdk.outputs.archive }}
+          NODE_DISABLE_COMPILE_CACHE: '1'
+          TSX_DISABLE_CACHE: '1'
+        run: |
+          cd .host-sdk-source
+          node --import ./apps/server/node_modules/tsx/dist/loader.mjs --test apps/server/src/module-file.integration.test.ts
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: cockpit-file-${{ github.sha }}-linux-x64
+          path: |
+            module-output/*.tgz
+            module-output/*.tgz.sha256
+          if-no-files-found: error
+          retention-days: 7

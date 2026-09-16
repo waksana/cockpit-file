@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .cockpit-sdk/
+.host-sdk-source/
+.module-build.json
 .fixtures/
 module-output/
 *.tgz

@@ -86,6 +86,8 @@ Agent 用原生工具生成文件，正常回复 Markdown
 | [消息观察与加载](observation-and-loading.md) | 现有通知链路、流式状态机、复杂度、五秒等待和重新请求 |
 | [端到端验收](acceptance.md) | 前后端与宿主配合的验收矩阵，不是已经通过的测试报告 |
 | [Roadmap](roadmap.md) | 明确延后的能力，不作为首版完成条件 |
+| [CI 与版本发行](releases.md) | PR 门禁、SDK pin、固定来源构建及 `.tgz` Release |
+| [本次发行说明](release-notes.md) | 当前版本的发布输入，已发布说明由 GitHub Releases 承载 |
 
 维护时只在对应主题中修改细节；这里保留范围和索引，不复制所有 schema。
 
