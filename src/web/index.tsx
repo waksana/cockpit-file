@@ -5,8 +5,13 @@ import type { ReactNode } from 'react';
 import { isLocalFileReference, messageFileUrl, nativeFileUrl } from '../shared/files.ts';
 import { DEFAULT_MAX_BYTES, FileProbes, formatBytes, previewKind, UploadStore } from './file-state.ts';
 import { decodeNativeBlob, unavailableBlobReason, type NativeBlob } from './blob.ts';
+import { icons } from './icons.ts';
 
 export const activate: ActivateFrontend = context => {
+  if (context.uiVersion !== 1 || typeof context.createPortal !== 'function') {
+    throw new Error('Cockpit File requires host Module UI v1 and context.createPortal; upgrade the paired host first.');
+  }
+  const createPortal = context.createPortal;
   const React = context.react;
   const nativePathPrefix = typeof context.config.nativePathPrefix === 'string' ? context.config.nativePathPrefix : '';
   const maxBytes = typeof context.config.maxBytes === 'number' && Number.isSafeInteger(context.config.maxBytes) && context.config.maxBytes > 0
@@ -35,13 +40,15 @@ export const activate: ActivateFrontend = context => {
     );
   }
 
-  function ActionIcon({ name }: { name: 'remove' | 'download' | 'retry' }) {
-    return <svg className="cf-action-icon" width="18" height="18" viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      <path d={name === 'remove' ? 'm7 7 10 10M17 7 7 17'
-        : name === 'download' ? 'M12 3v12m-4-4 4 4 4-4M5 17v4h14v-4'
-          : 'M19 8a8 8 0 1 0 1 8M20 3v6h-6'} />
+  function Icon({ name, small = false }: { name: keyof typeof icons; small?: boolean }) {
+    return <svg className={`ck-icon${small ? ' ck-icon-md' : ''}`} width="24" height="24" viewBox="0 0 24 24" fill="none"
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      {icons[name].map(([tag, attributes], key) => React.createElement(tag, { ...attributes, key }))}
     </svg>;
+  }
+
+  function ActionIcon({ name }: { name: 'remove' | 'download' | 'retry' }) {
+    return <Icon small name={name === 'remove' ? 'x' : name === 'retry' ? 'rotate-cw' : 'download'} />;
   }
 
   function UploadAction(composer: ComposerContext) {
@@ -52,7 +59,7 @@ export const activate: ActivateFrontend = context => {
     return <span className="cf-upload-action">
       <button
         type="button"
-        className="cf-upload-button"
+        className="ck-icon-button"
         disabled={disabled}
         title={composer.operation === 'prompt' ? `添加文件（单个最多 ${formatBytes(maxBytes)}）` : '当前操作不接受附件'}
         aria-label="添加文件"
@@ -61,10 +68,7 @@ export const activate: ActivateFrontend = context => {
           input.current?.click();
         }}
       >
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"
-          strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-          <path d="m10.1 13 6-6a2.5 2.5 0 0 1 3.5 3.5l-8 8a4.5 4.5 0 0 1-6.4-6.4l8-8" />
-        </svg>
+        <Icon name="paperclip" />
       </button>
       <input
         ref={input} type="file" multiple className="cf-file-input" tabIndex={-1} aria-label="选择文件"
@@ -91,7 +95,7 @@ export const activate: ActivateFrontend = context => {
       {(ready.length > 0 || pending.items.length > 0) && <ul className="cf-attachment-list">
         {ready.map(item => {
           const name = item.value.displayName || '附件';
-          const actions = <button type="button" className="cf-icon-button" disabled={disabled} title="移除"
+          const actions = <button type="button" className="ck-icon-button ck-danger" disabled={disabled} title="移除"
             onClick={() => uploads.removeAttachment(composer.draft, item.id)} aria-label={`移除 ${name}`}><ActionIcon name="remove" /></button>;
           const status = draft.pending ? '正在提交' : '准备就绪';
           const url = item.value.type === 'file' ? nativeFileUrl(item.value.path, nativePathPrefix, context.apiBase) : null;
@@ -103,10 +107,10 @@ export const activate: ActivateFrontend = context => {
           </li>;
         })}
         {pending.items.map(item => {
-          const retry = item.status === 'failed' ? <button type="button" className="cf-icon-button" title="重试上传"
+          const retry = item.status === 'failed' ? <button type="button" className="ck-icon-button" title="重试上传"
             disabled={disabled || composer.operation !== 'prompt'}
             onClick={() => uploads.retry(composer.draft, item.id)} aria-label={`重新上传 ${item.name}`}><ActionIcon name="retry" /></button> : undefined;
-          const actions = <button type="button" className="cf-icon-button" disabled={disabled} title="移除"
+          const actions = <button type="button" className="ck-icon-button ck-danger" disabled={disabled} title="移除"
             onClick={() => uploads.remove(composer.draft, item.id)} aria-label={`移除 ${item.name}`}><ActionIcon name="remove" /></button>;
           const props = {
             name: item.name, actions, retry, download: false, error: item.error,
@@ -157,15 +161,17 @@ export const activate: ActivateFrontend = context => {
     const stem = extension ? name.slice(0, -extension.length) : name;
     const information = [status, metadata].filter(Boolean).join(' · ');
     React.useEffect(() => {
-      if (!open) return;
+      if (!open || context.signal.aborted) return;
       const element = dialog.current;
       element?.showModal();
-      return () => element?.close();
+      const close = () => element?.close();
+      context.signal.addEventListener('abort', close, { once: true });
+      return () => {
+        context.signal.removeEventListener('abort', close);
+        close();
+      };
     }, [open, expanded]);
-    const icon = <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-      strokeWidth="1.5" aria-hidden="true">
-      <path d="M14 3H6a1 1 0 0 0-1 1v16h14V8Zm0 0v5h5M8 12h8M8 16h6" />
-    </svg>;
+    const icon = <Icon name="file" />;
     const media = preview && (preview.kind === 'image'
       ? <img key={preview.key} className="cf-media" src={preview.url} alt="" data-loading={preview.loading}
         onLoad={preview.ready} onError={preview.failed} />
@@ -174,29 +180,33 @@ export const activate: ActivateFrontend = context => {
           aria-hidden="true" onLoadedMetadata={preview.ready} onError={preview.failed} />
         : <><audio key={preview.key} className="cf-audio-probe" src={preview.url} preload="metadata"
           onLoadedMetadata={preview.ready} onError={preview.failed} />{icon}</>);
-    return <span className="cf-card" role="group" aria-label={name} aria-busy={busy}>
-      <button type="button" className="cf-card-open" aria-label={label} aria-haspopup="dialog"
-        aria-description={error || information} title={name} onClick={() => setExpanded(preview?.key ?? detailsKey)} />
-      <span className="cf-thumbnail" aria-hidden="true">
-        {media ?? icon}
-        {preview && preview.kind !== 'image' && <span className="cf-play" aria-hidden="true">▶</span>}
-      </span>
-      <span className="cf-card-details">
-        <span className="cf-card-name" title={name}>
-          <span className="cf-name-stem" dir="auto">{stem}</span>{extension && <bdi className="cf-name-extension">{extension}</bdi>}
+    return <span className="cf-card" aria-busy={busy}>
+      <button type="button" className="ck-button cf-card-open" aria-label={label} aria-haspopup="dialog"
+        aria-description={error || information} title={name} onClick={() => {
+          if (!context.signal.aborted) setExpanded(preview?.key ?? detailsKey);
+        }}>
+        <span className="cf-thumbnail" aria-hidden="true">
+          {media ?? icon}
+          {preview && preview.kind !== 'image' && <span className="cf-play" aria-hidden="true"><Icon name="play" /></span>}
         </span>
-        {error ? <span className="cf-card-status cf-error" title={error} role="alert">文件异常 · 查看原因</span>
-          : <span className="cf-card-status" title={information} role={busy ? 'status' : undefined}>{information}</span>}
-        <span className="cf-progress-slot">
-          {busy && <progress className="cf-progress" aria-label={`${name}：${status || '文件加载中'}`} />}
+        <span className="cf-card-details">
+          <span className="cf-card-name" title={name}>
+            <span className="cf-name-stem" dir="auto">{stem}</span>{extension && <bdi className="cf-name-extension">{extension}</bdi>}
+          </span>
+          {error ? <span className="cf-card-status cf-error" title={error} role="alert">文件异常 · 查看原因</span>
+            : <span className="cf-card-status" title={information} role={busy ? 'status' : undefined}>{information}</span>}
+          <span className="cf-progress-slot">
+            {busy && <progress className="cf-progress" aria-label={`${name}：${status || '文件加载中'}`} />}
+          </span>
         </span>
-      </span>
+      </button>
       <span className="cf-card-actions">{actions}</span>
-      {open && <dialog key={expanded} ref={dialog} className="cf-preview-dialog" aria-label={`${detailsOpen ? '文件详情' : '预览'} ${name}`}
+      {open && page?.body && createPortal(<dialog key={expanded} ref={dialog} className="cf-preview-dialog" aria-label={`${detailsOpen ? '文件详情' : '预览'} ${name}`}
         onClose={() => setExpanded(current => current === expanded ? undefined : current)}>
         <span className="cf-dialog-header">
           <span className="cf-dialog-name" dir="auto">{name}</span>
-          <button type="button" className="cf-button" autoFocus onClick={() => dialog.current?.close()}>
+          <button type="button" className="ck-button" autoFocus onClick={() => dialog.current?.close()}>
+            <Icon small name="x" />
             {detailsOpen ? '关闭详情' : '关闭预览'}
           </button>
         </span>
@@ -210,7 +220,7 @@ export const activate: ActivateFrontend = context => {
             onLoadedMetadata={preview.ready} onError={preview.failed} />
             : preview?.kind === 'audio' ? <audio className="cf-expanded-media" src={preview.url} aria-label={name} controls preload="metadata"
               onLoadedMetadata={preview.ready} onError={preview.failed} /> : null)}
-      </dialog>}
+      </dialog>, page.body)}
     </span>;
   }
 
@@ -245,9 +255,9 @@ export const activate: ActivateFrontend = context => {
       } : undefined}
       actions={<>
         {retry ?? ((state.status === 'unavailable' || state.preview === 'failed') &&
-          <button type="button" className="cf-icon-button" title="重试预览" onClick={() => probes.retry(url)}
+          <button type="button" className="ck-icon-button" title="重试预览" onClick={() => probes.retry(url)}
             aria-label={`重新加载 ${name}`}><ActionIcon name="retry" /></button>)}
-        {download && state.status === 'ready' && <a className="cf-download cf-icon-button" href={`${url}?download=1`} download={name}
+        {download && state.status === 'ready' && <a className="ck-icon-button" href={`${url}?download=1`} download={name}
           title="下载" aria-label={`下载 ${name}`}><ActionIcon name="download" /></a>}
         {actions}
       </>} />;
@@ -322,9 +332,9 @@ export const activate: ActivateFrontend = context => {
       } : undefined}
       actions={<>
         {retry ?? (resource?.preview === 'failed' &&
-          <button type="button" className="cf-icon-button" title="重试预览" onClick={() => setRound(value => value + 1)}
+          <button type="button" className="ck-icon-button" title="重试预览" onClick={() => setRound(value => value + 1)}
             aria-label={`重新加载 ${name}`}><ActionIcon name="retry" /></button>)}
-        {download && resource && <a className="cf-download cf-icon-button" href={resource.url} download={name}
+        {download && resource && <a className="ck-icon-button" href={resource.url} download={name}
           title="下载" aria-label={`下载 ${name}`}><ActionIcon name="download" /></a>}
         {actions}
       </>} />;
