@@ -11,6 +11,8 @@ Initial local file module for Cockpit Module API v1.
 - Requires the pinned Cockpit 0.2.0 host source in `tooling/host-sdk.json`; the already published
   Cockpit v0.1.0 service does not provide the required module API.
 - Node 24.20.0 and Linux are the current runtime baseline. CI exercises Linux x64.
+- Cockpit manages only host/module data; native Copilot sessions and authentication
+  keep their own default directory and configuration without migration.
 
 The module runs as trusted host-process code and may capture local files readable by the service user.
 Do not expose module routes without the host's authenticated access boundary.
