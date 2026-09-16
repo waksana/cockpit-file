@@ -1,12 +1,12 @@
 # 下载、构建与安装
 
-**cockpit-file 0.1.1** 需要固定 **Cockpit 0.2.0** 源码或兼容的后续运行包；
+**cockpit-file 0.1.2 开发版本（尚未发布）** 需要固定 **Cockpit 0.2.0** 源码或兼容的后续运行包；
 不能对已发布的 Cockpit v0.1.0 直接执行模块命令。
 
 本次输入区配套调整已通过 [waksana/cockpit#7](https://github.com/waksana/cockpit/pull/7) 合入，
 当前固定提交记录在 [`tooling/host-sdk.json`](../tooling/host-sdk.json)。
-0.1.1 不能直接配合缺少 rendersDraftAttachments 声明支持的旧宿主；
-已发布的 0.1.0 使用对应 tag 的文档和构建基线。
+不能直接配合缺少 rendersDraftAttachments 声明支持的旧宿主；
+已发布的 0.1.1/0.1.0 使用对应 tag 的文档和构建基线。
 
 普通安装从 [GitHub Releases](https://github.com/waksana/cockpit-file/releases)
 下载同一版本的 `cockpit-file-X.Y.Z.tgz` 和 `.tgz.sha256`，
@@ -54,8 +54,8 @@ pnpm package
 默认输出：
 
 ```text
-module-output/cockpit-file-0.1.1.tgz
-module-output/cockpit-file-0.1.1.tgz.sha256
+module-output/cockpit-file-0.1.2.tgz
+module-output/cockpit-file-0.1.2.tgz.sha256
 ```
 
 输出目录必须不存在，也可以 `pnpm package /absolute/new/output` 指定新目录。
@@ -71,7 +71,7 @@ module-output/cockpit-file-0.1.1.tgz.sha256
 ```sh
 node --import ./apps/server/node_modules/tsx/dist/loader.mjs \
   apps/server/src/module-cli.ts install \
-  /absolute/path/cockpit-file-0.1.1.tgz --trust-local-code --enable
+  /absolute/path/cockpit-file-0.1.2.tgz --trust-local-code --enable
 ```
 
 该确认表示信任本地代码，不是密码、签名验证或安全沙箱。
