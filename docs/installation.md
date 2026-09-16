@@ -1,6 +1,6 @@
 # 下载、构建与安装
 
-**cockpit-file 0.1.2 开发版本（尚未发布）** 需要固定 **Cockpit 0.2.0** 源码或兼容的后续运行包；
+**cockpit-file 0.1.2** 需要固定 **Cockpit 0.2.0** 源码或兼容的后续运行包；
 不能对已发布的 Cockpit v0.1.0 直接执行模块命令。
 
 本次输入区配套调整已通过 [waksana/cockpit#7](https://github.com/waksana/cockpit/pull/7) 合入，
