@@ -1,14 +1,16 @@
-# 本地构建与安装
+# 下载、构建与安装
 
-当前为 **cockpit-file 0.1.0 / Cockpit 0.2.0 开发源码**，未创建正式 Release。
-先取得明确包含 Module API v1 的 Cockpit 源码或之后发布的对应运行包；
+**cockpit-file 0.1.0** 需要包含 Module API v1 的 **Cockpit 0.2.0** 源码或对应运行包；
 不能对已发布的 Cockpit v0.1.0 直接执行模块命令。
 
-本模块对应的宿主实现为
-[waksana/cockpit#4](https://github.com/waksana/cockpit/pull/4)，
-当前固定提交记录在 [`tooling/host-sdk.json`](../tooling/host-sdk.json)，
-包含原生 blob 展示描述与模块异常处理的修正。
-该 PR 未合并前，需明确选择固定提交，不能直接使用缺少接口的 main。
+宿主实现已通过 [waksana/cockpit#4](https://github.com/waksana/cockpit/pull/4) 和
+[waksana/cockpit#6](https://github.com/waksana/cockpit/pull/6) 合入，
+当前固定提交记录在 [`tooling/host-sdk.json`](../tooling/host-sdk.json)。
+
+普通安装从 [GitHub Releases](https://github.com/waksana/cockpit-file/releases)
+下载同一版本的 `cockpit-file-X.Y.Z.tgz` 和 `.tgz.sha256`，
+执行 `sha256sum -c cockpit-file-X.Y.Z.tgz.sha256` 后按下方安装步骤启用。
+Source code ZIP/tar 不是模块安装包。只有源码开发需要执行 SDK 准备和构建步骤。
 
 ## 1. 条件
 
@@ -83,12 +85,13 @@ node --import ./apps/server/node_modules/tsx/dist/loader.mjs apps/server/src/ind
 
 ## 4. 数据根与配置
 
-Cockpit 0.2.0 的 `COCKPIT_HOME` 默认是 `~/.cockpit`。自定义时传入非空绝对路径，
-安装 CLI 和服务必须使用同一根。
+Cockpit 0.2.0 的 `COCKPIT_HOME` 默认是 `~/.cockpit`，只控制本体和模块内容。
+自定义时传入非空绝对路径，安装 CLI 和服务必须使用同一宿主根。
+Copilot 原生会话和认证使用自己的默认目录及配置，不受 `COCKPIT_HOME` 控制，
+不需要为启用文件模块迁移、复制或链接原生目录。
 
 ```text
 .cockpit/
-  copilot/                             原生数据
   modules/config.json                 模块选择与参数
   modules/installed/cockpit-file/...   不可变模块代码
   modules/data/cockpit-file/

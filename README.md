@@ -19,13 +19,12 @@ Agent 可以照常使用 Markdown 引用文件，不需要学习额外的发送�
 
 ## 当前状态
 
-**本地模块首版已实现，尚未正式发布。** 源码版本为 0.1.0，
+**本地模块首版已实现。** 版本为 0.1.0，
 需要支持 Module API v1 的 Cockpit 0.2.0；已发布的 Cockpit v0.1.0 不支持此模块。
-对应的宿主实现正在 [waksana/cockpit#4](https://github.com/waksana/cockpit/pull/4) 中审阅，
-未合并前不要假定 Cockpit main 已具备这些接口。
+对应宿主实现已合入；准确的构建基线见[安装指南](docs/installation.md)。
 
-按[本地构建与安装](docs/installation.md)使用，或从[完整文档](docs/README.md)了解流程、分工和限制。
-正式发行时，模块安装包从 [Releases](https://github.com/waksana/cockpit-file/releases) 获取。
+从 [Releases](https://github.com/waksana/cockpit-file/releases) 下载 `.tgz` 模块安装包和校验文件，
+按[下载与安装](docs/installation.md)使用，或从[完整文档](docs/README.md)了解流程、分工和限制。
 
 ## 参与讨论
 
