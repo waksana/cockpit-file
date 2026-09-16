@@ -1,6 +1,6 @@
 # Cockpit File 0.1.3
 
-Unreleased native artifact-path and SVG preview update for Cockpit Module API v1.
+Native artifact-path and SVG preview update for Cockpit Module API v1.
 
 - Resolve `files/...` against only the project cwd and SDK-provided session workspace.
   Capture a unique source; reject ambiguity instead of guessing, searching disks or prompting the Agent.
@@ -10,6 +10,8 @@ Unreleased native artifact-path and SVG preview update for Cockpit Module API v1
 - Keep SVG in image mode rather than injecting markup, with sandboxed resource headers,
   blocked external resources/scripts and permitted inline drawing styles.
 - Preserve original downloads and existing snapshot MIME; no historical capture or data migration.
+- The preview retry action rechecks the stored snapshot only. It does not copy a source again
+  for an old missing/failed reference; a new live message can initiate a new capture.
 
 - Keep draft/message cards at 280 x 72px at the default font size across loading, ready, submission and error states.
 - Narrow screens share a viewport width cap (240 x 72px at a 320px viewport) without changing the host's message arrangement.
