@@ -31,9 +31,10 @@ async function fixture(t: TestContext, config: Record<string, unknown> = {}) {
     return Promise.resolve(route.handler({ params: {}, query: {}, headers: {}, body: undefined, signal: controller.signal, ...patch }));
   };
   let serial = 0;
-  const event = (type: string, messageId: string, data: Record<string, unknown> = {}, directory = cwd) => {
+  const event = (type: string, messageId: string, data: Record<string, unknown> = {}, directory = cwd,
+    nativeContext: Pick<NativeObservation, 'workspacePath'> = { workspacePath: null }) => {
     const observation: NativeObservation = {
-      sessionId: 'synthetic-session', cwd: directory,
+      sessionId: 'synthetic-session', cwd: directory, ...nativeContext,
       event: { id: `event-${++serial}`, timestamp: new Date().toISOString(), type,
         ...(type === 'assistant.message_start' || type === 'assistant.message_delta' ? { ephemeral: true } : {}),
         data: { messageId, ...data } },
@@ -156,6 +157,89 @@ test('one native response can schedule more references than the concurrent copy 
   assert.deepEqual(f.errors, []);
 });
 
+test('artifact references preserve the raw message URL whether the unique source is project or SDK workspace', async t => {
+  const f = await fixture(t);
+  const workspacePath = join(f.root, 'custom-native-workspace');
+  await mkdir(join(workspacePath, 'files'), { recursive: true });
+  await mkdir(join(f.cwd, 'files'));
+  const reference = 'files/seaside%20sunset.svg';
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="20"><rect width="30" height="20"/></svg>';
+  const file = 'seaside sunset.svg';
+  for (const [message, root] of [['native-root', workspacePath], ['project-root', f.cwd]]) {
+    const path = join(root!, 'files', file);
+    await writeFile(path, svg);
+    await f.event('assistant.message_start', message!, {}, f.cwd, { workspacePath });
+    await f.event('assistant.message_delta', message!, { deltaContent: `![sunset](${reference})` }, f.cwd, { workspacePath });
+    const head = await f.ready(() => f.messageHead(message!, reference));
+    assert.equal(head.headers?.['Content-Type'], 'image/svg+xml');
+    const result = await f.request('GET', '/messages/*', { params: { '*': f.ref(message!, reference) } });
+    assert.ok(result.body instanceof Readable);
+    assert.equal(Buffer.concat(await result.body.toArray()).toString(), svg);
+    await rm(path);
+    assert.equal((await f.messageHead(message!, reference)).status, undefined, 'snapshot survives source deletion');
+  }
+  assert.deepEqual(f.errors, []);
+});
+
+test('unknown workspace waits for native context and retains the reference-time project cwd', async t => {
+  const f = await fixture(t);
+  const workspacePath = join(f.root, 'native');
+  const moved = join(f.root, 'moved');
+  await mkdir(join(f.cwd, 'files'));
+  await mkdir(moved);
+  await writeFile(join(f.cwd, 'files', 'original.txt'), 'reference-time project');
+  const reference = './files/original.txt';
+  await f.event('assistant.message_start', 'early', {}, f.cwd, {});
+  await f.event('assistant.message_delta', 'early', { deltaContent: `[file](${reference})` }, f.cwd, {});
+  assert.equal((await f.messageHead('early', reference)).status, 404, 'unknown workspace must not silently mean no second source');
+  await f.event('assistant.message', 'early', { content: `[file](${reference})` }, moved, { workspacePath });
+  await f.ready(() => f.messageHead('early', reference));
+  const response = await f.request('GET', '/messages/*', { params: { '*': f.ref('early', reference) } });
+  assert.ok(response.body instanceof Readable);
+  assert.equal(Buffer.concat(await response.body.toArray()).toString(), 'reference-time project');
+  assert.deepEqual(f.errors, []);
+});
+
+test('missing workspace context stays explicit while a known absent workspace permits project artifacts', async t => {
+  const f = await fixture(t);
+  await mkdir(join(f.cwd, 'files'));
+  await writeFile(join(f.cwd, 'files', 'file.txt'), 'project');
+  const content = '[file](files/file.txt)';
+  await f.event('assistant.message_start', 'unknown', {}, f.cwd, {});
+  await f.event('assistant.message_delta', 'unknown', { deltaContent: content }, f.cwd, {});
+  await f.event('assistant.message', 'unknown', { content }, f.cwd, {});
+  assert.equal((await f.messageHead('unknown', 'files/file.txt')).status, 404);
+  assert.match(String(f.errors[0]), /workspace context unavailable/);
+  await f.event('assistant.message_start', 'no-workspace');
+  await f.event('assistant.message_delta', 'no-workspace', { deltaContent: content });
+  await f.ready(() => f.messageHead('no-workspace', 'files/file.txt'));
+});
+
+test('two existing artifact candidates fail rather than guessing or reopening historical references', async t => {
+  const f = await fixture(t);
+  const workspacePath = join(f.root, 'native');
+  for (const root of [f.cwd, workspacePath]) {
+    await mkdir(join(root, 'files'), { recursive: true });
+    await writeFile(join(root, 'files', 'ambiguous.txt'), root);
+  }
+  const content = '[file](files/ambiguous.txt)';
+  await f.event('assistant.message_start', 'ambiguous', {}, f.cwd, { workspacePath });
+  await f.event('assistant.message_delta', 'ambiguous', { deltaContent: content }, f.cwd, { workspacePath });
+  let response = await f.messageHead('ambiguous', 'files/ambiguous.txt');
+  const deadline = Date.now() + 4000;
+  while ([202, 404].includes(response.status ?? 200) && Date.now() < deadline) {
+    await delay(5);
+    response = await f.messageHead('ambiguous', 'files/ambiguous.txt');
+  }
+  assert.equal(response.status, 422);
+  const result = await f.request('GET', '/messages/*', { params: { '*': f.ref('ambiguous', 'files/ambiguous.txt') } });
+  assert.equal((result.body as { code: string }).code, 'AMBIGUOUS_SOURCE');
+  await rm(join(f.cwd, 'files', 'ambiguous.txt'));
+  await f.event('assistant.message', 'ambiguous', { content }, f.cwd, { workspacePath });
+  assert.equal((await f.messageHead('ambiguous', 'files/ambiguous.txt')).status, 422);
+  while (!f.errors.length && Date.now() < deadline) await delay(5);
+  assert.equal(f.errors.length, 1);
+});
 test('new references use the current native working directory without changing an earlier snapshot', async t => {
   const f = await fixture(t);
   const other = join(f.root, 'other');

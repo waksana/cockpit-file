@@ -1,7 +1,11 @@
 # Cockpit File 0.1.3
 
-Unreleased SVG preview update for Cockpit Module API v1.
+Unreleased native artifact-path and SVG preview update for Cockpit Module API v1.
 
+- Resolve `files/...` against only the project cwd and SDK-provided session workspace.
+  Capture a unique source; reject ambiguity instead of guessing, searching disks or prompting the Agent.
+- Keep the session/message/raw-reference URL unchanged regardless of which source directory supplied the bytes.
+- Requires the SDK workspace observation field in waksana/cockpit#15; absent early context is not treated as proof that no native workspace exists.
 - Recognize newly stored SVG bytes and preview them through the existing image-card path.
 - Keep SVG in image mode rather than injecting markup, with sandboxed resource headers,
   blocked external resources/scripts and permitted inline drawing styles.

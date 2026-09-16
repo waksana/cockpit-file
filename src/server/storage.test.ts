@@ -354,6 +354,32 @@ test('root validation rejects relative, symlinked, and nonprivate directories wi
   await assert.rejects(createFileStorage({ root: join(parent, 'invalid'), maxBytes: -1 }), code('INVALID_INPUT'));
 });
 
+test('capture opens only a unique explicit source and records ambiguous candidates as a terminal failure', async t => {
+  const { storage, parent } = await fixture(t);
+  const project = join(parent, 'project.txt');
+  const artifact = join(parent, 'artifact.txt');
+  await writeFile(artifact, 'artifact');
+  const first = await storage.capture('artifact', 'files/file.txt', [project, artifact]);
+  assert.equal((await read(storage, first.id)).bytes.toString(), 'artifact');
+  await writeFile(project, 'project');
+  await assert.rejects(storage.capture('both', 'files/file.txt', [project, artifact]), code('AMBIGUOUS_SOURCE'));
+  const ambiguous = await storage.lookupCapture('both', 'files/file.txt');
+  assert.ok(ambiguous.state === 'failed');
+  assert.equal(ambiguous.error.code, 'AMBIGUOUS_SOURCE');
+  await rm(artifact);
+  await assert.rejects(storage.capture('both', 'files/file.txt', [project, artifact]), code('AMBIGUOUS_SOURCE'));
+  const second = await storage.capture('project', 'files/file.txt', [project, artifact]);
+  assert.equal((await read(storage, second.id)).bytes.toString(), 'project');
+  const duplicate = await storage.capture('same-root', 'files/file.txt', [project, project]);
+  assert.equal((await read(storage, duplicate.id)).bytes.toString(), 'project');
+  await rm(project);
+  await assert.rejects(storage.capture('none', 'files/file.txt', [project, artifact]), code('SOURCE_NOT_FOUND'));
+  await mkdir(project);
+  await writeFile(artifact, 'do not choose past invalid source');
+  await assert.rejects(storage.capture('invalid', 'files/file.txt', [project, artifact]), code('INVALID_SOURCE'));
+  assert.throws(() => storage.capture('empty', 'file', []), code('INVALID_INPUT'));
+  assert.throws(() => storage.capture('many', 'file', [project, artifact, join(parent, 'third')]), code('INVALID_INPUT'));
+});
 test('persisted interrupted captures report a bounded error and cannot be restarted by duplicate references', async t => {
   const { parent, root, storage, reopen } = await fixture(t);
   const source = join(parent, 'missing.txt');
