@@ -1,0 +1,21 @@
+{
+  "name": "cockpit-file",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "packageManager": "pnpm@10.34.5",
+  "engines": { "node": "24.20.0" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --experimental-strip-types --test \"src/**/*.test.ts\" scripts/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "package": "node scripts/package.mjs"
+  },
+  "devDependencies": {
+    "@cockpit/module-api": "file:.cockpit-sdk/module-api",
+    "@types/node": "25.9.5",
+    "@types/react": "19.2.18",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "apiVersion": 1,
+  "id": "cockpit-file",
+  "name": "Files",
+  "version": "0.1.0",
+  "backend": "dist/server/index.js",
+  "frontend": {
+    "entry": "dist/web/index.js",
+    "styles": ["dist/web/styles.css"],
+    "assets": ["dist/web", "dist/shared"]
+  }
+}

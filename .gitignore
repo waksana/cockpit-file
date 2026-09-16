@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.cockpit-sdk/
+.fixtures/
+module-output/
+*.tgz
+*.tgz.sha256
+*.tsbuildinfo
