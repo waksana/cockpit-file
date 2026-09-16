@@ -3,6 +3,15 @@
 **cockpit-file 0.1.4** 需要固定 **Cockpit 0.2.0** 源码或兼容的后续运行包；
 不能对已发布的 Cockpit v0.1.0 直接执行模块命令。
 
+**未发布的配套 UI 变更：** 此分支前端另要求 `context.uiVersion === 1`
+及公共 `context.createPortal`，旧宿主会被明确拒绝；不能仅凭宿主版本号或 API v1 推断支持。
+公共规则见宿主[模块 UI 指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md)。
+当前 `tooling/host-sdk.json` 固定包含该能力的真实宿主提交
+[`c84f7bc6b45373560ce09cf21ccd9a3519913be2`](https://github.com/waksana/cockpit/commit/c84f7bc6b45373560ce09cf21ccd9a3519913be2)
+（Cockpit 0.2.0 / Module API v1）；已从该干净提交重新导出并核验 SDK，前端直接使用其权威类型。
+此配套提交不表示已发布或已部署。发布前先交付支持该能力的宿主，再发布模块；
+先升级宿主，后升级模块。本次工作不执行发布、部署或重启。
+
 本次输入区配套调整已通过 [waksana/cockpit#7](https://github.com/waksana/cockpit/pull/7) 合入，
 当前固定提交记录在 [`tooling/host-sdk.json`](../tooling/host-sdk.json)。
 0.1.3 的相对产物路径支持依赖已合入的 [waksana/cockpit#15](https://github.com/waksana/cockpit/pull/15)
@@ -62,7 +71,10 @@ module-output/cockpit-file-0.1.4.tgz.sha256
 
 输出目录必须不存在，也可以 `pnpm package /absolute/new/output` 指定新目录。
 打包要求干净的已提交源码；修改后先提交再重新 build，不能复用旧构建凭据。
-包包含 manifest、编译后的 dist、LICENSE 和 `module-build.json` 来源清单；React 由宿主注入，
+包包含 manifest、编译后的 dist、LICENSE 和 `module-build.json` 来源清单；
+`dist/licenses/lucide.txt` 保留固定 Lucide 1.46.0 的完整 ISC 及 Feather/MIT 来源声明，
+运行时代码只包含实际使用的六个图标的 SVG 节点，不包含整库/字体/CDN/React 依赖。
+React 与 portal 渲染器由宿主注入，
 后端运行代码只使用 Node 标准库。`.cockpit-sdk` 和开发依赖不随模块包交付。
 正式 `.tgz` Release 的流程见[CI 与版本发行](releases.md)。
 

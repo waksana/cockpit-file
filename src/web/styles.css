@@ -4,67 +4,6 @@
   flex: none;
 }
 
-.cf-upload-button {
-  display: grid;
-  place-items: center;
-  flex: none;
-  width: 2.5rem;
-  height: 2.5rem;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--secondary-text-color, inherit);
-  cursor: pointer;
-}
-
-.cf-upload-button > svg,
-.cf-action-icon {
-  display: block;
-  flex: none;
-  overflow: visible;
-  pointer-events: none;
-}
-
-.cf-upload-button:hover:not(:disabled) {
-  box-shadow: inset 0 0 0 1px var(--border-color, #8886);
-}
-
-.cf-upload-button:disabled,
-.cf-icon-button:disabled,
-.cf-button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.cf-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  min-height: 2rem;
-  padding: 0.3rem 0.6rem;
-  border: 1px solid var(--border-color, #8886);
-  border-radius: 0.4rem;
-  color: var(--primary-text-color, inherit);
-  background: transparent;
-  font: inherit;
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-
-.cf-button:hover:not(:disabled),
-.cf-icon-button:hover:not(:disabled) {
-  background: var(--ripple-color, #8882);
-}
-
-.cf-button:focus-visible,
-.cf-icon-button:focus-visible,
-.cf-upload-button:focus-visible {
-  outline: 2px solid var(--primary-color, #588bd8);
-  outline-offset: 1px;
-}
-
 .cf-file-input {
   display: none;
 }
@@ -72,7 +11,7 @@
 .cf-attachments {
   min-width: 0;
   margin-block: 0.4rem;
-  color: var(--primary-text-color, inherit);
+  color: var(--ck-color-text);
   font-size: 0.85rem;
 }
 
@@ -94,11 +33,12 @@
 }
 
 .cf-card {
+  --cf-actions-width: calc(2 * var(--ck-control-size));
   position: relative;
   isolation: isolate;
   display: inline-grid;
   box-sizing: border-box;
-  grid-template-columns: 3rem minmax(0, 1fr) 4rem;
+  grid-template-columns: 3rem minmax(0, 1fr) var(--cf-actions-width);
   align-items: center;
   flex: 0 0 auto;
   vertical-align: top;
@@ -107,33 +47,28 @@
   height: 4.5rem;
   min-width: 0;
   margin: 0;
-  padding: 0.6875rem 0.5rem;
-  gap: 0.5rem;
-  border: 1px solid var(--border-color, #8886);
-  border-radius: var(--border-radius, 0.75rem);
-  background: var(--surface-color, transparent);
-  color: var(--primary-text-color, inherit);
+  padding: 0;
+  border: 1px solid var(--ck-color-border);
+  border-radius: var(--ck-radius);
+  background: var(--ck-color-surface);
+  color: var(--ck-color-text);
   line-height: 1.4;
 }
 
 .cf-card-open {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  padding: 0;
-  border: 0;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: 3rem minmax(0, 1fr) var(--cf-actions-width);
+  gap: 0.5rem;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  padding: 0.6875rem 0.5rem;
   border-radius: inherit;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.cf-card-open:hover {
-  box-shadow: inset 0 0 0 1px var(--border-color, #8886);
+  text-align: start;
 }
 
 .cf-card .cf-card-open:focus-visible {
-  outline: 2px solid var(--primary-color, #588bd8);
   outline-offset: -3px;
 }
 
@@ -141,7 +76,6 @@
   display: grid;
   grid-template-rows: 1.25rem 1.125rem 0.25rem;
   min-width: 0;
-  pointer-events: none;
 }
 
 .cf-card-name,
@@ -185,13 +119,13 @@
 .cf-card-status {
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--secondary-text-color, inherit);
+  color: var(--ck-color-muted);
   font-size: 0.6875rem;
   line-height: 1.125rem;
 }
 
 .cf-error {
-  color: var(--danger-color, #c45448);
+  color: var(--ck-color-danger);
   font-size: 0.8rem;
   overflow-wrap: anywhere;
 }
@@ -213,9 +147,8 @@
   border: 0;
   border-radius: 0.4rem;
   overflow: hidden;
-  background: var(--input-search-background-color, #8881);
-  color: var(--secondary-text-color, inherit);
-  pointer-events: none;
+  background: var(--ck-color-hover);
+  color: var(--ck-color-muted);
 }
 
 .cf-play {
@@ -224,8 +157,7 @@
   display: grid;
   place-items: center;
   color: white;
-  text-shadow: 0 1px 4px black;
-  font-size: 1rem;
+  filter: drop-shadow(0 1px 2px black);
 }
 
 .cf-media {
@@ -257,34 +189,24 @@
   width: 100%;
   height: 0.1875rem;
   margin: 0;
-  accent-color: var(--primary-color, #588bd8);
+  accent-color: var(--ck-color-accent);
 }
 
 .cf-card-actions {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   justify-content: flex-end;
   align-items: center;
-  width: 4rem;
-  height: 2.5rem;
+  width: var(--cf-actions-width);
+  height: var(--ck-control-size);
   pointer-events: none;
 }
 
-.cf-icon-button {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  box-sizing: border-box;
-  place-items: center;
-  flex: 0 0 2rem;
-  width: 2rem;
-  height: 2.5rem;
-  padding: 0;
-  border: 0;
-  border-radius: 0.4rem;
-  background: transparent;
-  color: var(--secondary-text-color, inherit);
-  text-decoration: none;
-  cursor: pointer;
+.cf-card-actions > button,
+.cf-card-actions > a {
   pointer-events: auto;
 }
 
@@ -294,10 +216,10 @@
   max-width: calc(100vw - 2rem);
   max-height: calc(100dvh - 2rem);
   padding: 1rem;
-  border: 1px solid var(--border-color, #8886);
+  border: 1px solid var(--ck-color-border);
   border-radius: 0.65rem;
-  color: var(--primary-text-color, inherit);
-  background: var(--surface-color, Canvas);
+  color: var(--ck-color-text);
+  background: var(--ck-color-surface);
 }
 
 .cf-preview-dialog::backdrop {

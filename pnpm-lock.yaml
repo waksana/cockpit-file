@@ -17,6 +17,9 @@ importers:
       '@types/react':
         specifier: 19.2.18
         version: 19.2.18
+      lucide-static:
+        specifier: 1.46.0
+        version: 1.46.0
       typescript:
         specifier: 5.9.3
         version: 5.9.3
@@ -37,6 +40,9 @@ packages:
 
   csstype@3.2.3:
     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
+
+  lucide-static@1.46.0:
+    resolution: {integrity: sha512-kq1lP/78BxG28VG3Ut2FxMeQElereTrrRwTBeXH7+olxATGcDbsuKRB/v/VKLhPrEu8BvNi6Uh2GvbH3pQcYhg==}
 
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
@@ -68,6 +74,8 @@ snapshots:
       csstype: 3.2.3
 
   csstype@3.2.3: {}
+
+  lucide-static@1.46.0: {}
 
   typescript@5.9.3: {}
 

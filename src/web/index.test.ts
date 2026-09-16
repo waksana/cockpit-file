@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import ts from 'typescript';
+import { icons } from './icons.ts';
 import type {
   ActivateFrontend, ComposerContext, DraftAttachment, ModuleDraft, ModuleDraftSnapshot,
   ModuleFrontend, ModuleFrontendContext, RenderNode,
@@ -13,12 +14,17 @@ const compiled = ts.transpileModule(source, {
 }).outputText
   .replaceAll("'../shared/files.ts'", JSON.stringify(new URL('../shared/files.ts', import.meta.url).href))
   .replaceAll("'./file-state.ts'", JSON.stringify(new URL('./file-state.ts', import.meta.url).href))
+  .replaceAll("'./icons.ts'", JSON.stringify(new URL('./icons.ts', import.meta.url).href))
   .replaceAll("'./blob.ts'", JSON.stringify(new URL('./blob.ts', import.meta.url).href));
 const { activate } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`) as { activate: ActivateFrontend };
 const fileId = `f_${'a'.repeat(64)}`;
 const apiBase = `https://host.test/cockpit/_modules/cockpit-file/${'b'.repeat(64)}/api`;
 const syntheticPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZAAAAABJRU5ErkJggg==';
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
+const body = {};
+Object.defineProperty(globalThis, 'document', { configurable: true, value: {
+  body, visibilityState: 'visible', addEventListener() {}, removeEventListener() {},
+} });
 
 class Draft implements ModuleDraft {
   sessionId = 'synthetic-session';
@@ -108,6 +114,11 @@ function harness() {
   };
   const context: ModuleFrontendContext = {
     apiVersion: 1, moduleId: 'cockpit-file', react: react as unknown as ModuleFrontendContext['react'],
+    uiVersion: 1,
+    createPortal: (node, container) => {
+      assert.equal(container, body, 'dialogs use the standard document body, never private host DOM');
+      return { type: 'fixture-portal', key: null, children: node, props: { children: [node], container } };
+    },
     apiBase, config: { nativePathPrefix: '/data/files/', maxBytes: 100_000 },
     signal: signal.signal, report: error => errors.push(error),
     request: async (path, init) => {
@@ -169,6 +180,32 @@ test('activation uses the host React and exposes only the v1 public extension sl
   signal.abort();
   assert.equal(frontend.fileInput![0]!.accepts([new File(['a'], 'a')]), false);
   frontend.dispose?.();
+});
+
+test('activation explicitly rejects missing or unsupported public UI and portal capability', async () => {
+  for (const version of [undefined, 0, 2]) {
+    const h = harness();
+    const invalid = { ...h.context, uiVersion: version } as unknown as ModuleFrontendContext;
+    await assert.rejects(async () => activate(invalid), /Module UI v1/);
+    assert.equal(h.calls.length, 0);
+  }
+  const h = harness();
+  const { createPortal: _portal, ...legacy } = h.context;
+  await assert.rejects(async () => activate(legacy as unknown as ModuleFrontendContext), /createPortal/);
+});
+
+test('only selected pinned Lucide SVG data is shipped with complete upstream licensing', async () => {
+  const upstream = JSON.parse(await readFile(new URL('../../node_modules/lucide-static/icon-nodes.json', import.meta.url), 'utf8'));
+  const metadata = JSON.parse(await readFile(new URL('../../node_modules/lucide-static/package.json', import.meta.url), 'utf8'));
+  assert.equal(metadata.version, '1.46.0');
+  assert.deepEqual(Object.keys(icons).sort(), ['download', 'file', 'paperclip', 'play', 'rotate-cw', 'x']);
+  for (const [name, nodes] of Object.entries(icons)) assert.deepEqual(nodes, upstream[name], name);
+  const license = await readFile(new URL('../../node_modules/lucide-static/LICENSE', import.meta.url), 'utf8');
+  assert.match(license, /ISC License/);
+  assert.match(license, /The MIT License.*for the icons listed above/);
+  assert.match(license, /Cole Bemis/);
+  const build = await readFile(new URL('../../scripts/build.mjs', import.meta.url), 'utf8');
+  assert.match(build, /node_modules\/lucide-static\/LICENSE.*dist\/licenses\/lucide.txt/);
 });
 
 function descendants(value: unknown): Element[] {
@@ -378,13 +415,13 @@ test('attachment action is an accessible borderless icon, not a boxed label', as
   const draft = new Draft();
   const tree = h.render(frontend.composerActions![0]!.component, { draft, operation: 'prompt', disabled: false });
   const button = descendants(tree).find(element => element.type === 'button')!;
-  assert.equal(button.props.className, 'cf-upload-button');
+  assert.equal(button.props.className, 'ck-icon-button');
   assert.equal(button.props['aria-label'], '添加文件');
   assert.match(String(button.props.title), /添加文件/);
   const icon = descendants(button).find(element => element.type === 'svg')!;
-  assert.equal(icon.props.width, '22');
-  assert.equal(icon.props.height, '22');
-  assert.equal(icon.props.strokeWidth, '1.5');
+  assert.equal(icon.props.width, '24');
+  assert.equal(icon.props.height, '24');
+  assert.equal(icon.props.strokeWidth, '2');
   assert.equal(icon.props.strokeLinecap, 'round');
   assert.equal(icon.props.strokeLinejoin, 'round');
   assert.equal(descendants(button).some(element => element.type === 'span'), false);
@@ -649,6 +686,30 @@ test('managed SVG previews reuse image elements for thumbnail and expansion with
   h.unmount();
   frontend.dispose?.();
 });
+
+test('module stop closes its body-mounted modal and a stale trigger cannot reopen it', async () => {
+  const h = harness();
+  const frontend = await activate(h.context);
+  const node: RenderNode = { kind: 'attachment', origin: { sessionId: 'fixture', messageId: 'stop-dialog' },
+    label: 'Synthetic details', attachment: { type: 'blob', mimeType: 'text/plain', data: 'aGVsbG8=' } };
+  const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+  render(); h.flushEffects();
+  const trigger = descendants(render()).find(element => element.props['aria-haspopup'] === 'dialog')!;
+  (trigger.props.onClick as () => void)();
+  const dialog = descendants(render()).find(element => element.type === 'dialog')!;
+  let closed = 0;
+  (dialog.props.ref as { current: unknown }).current = {
+    showModal() {},
+    close() { closed++; (dialog.props.onClose as () => void)(); },
+  };
+  h.flushEffects();
+  h.signal.abort();
+  assert.equal(closed, 1);
+  (trigger.props.onClick as () => void)();
+  assert.equal(descendants(render()).some(element => element.type === 'dialog'), false);
+  h.unmount();
+  frontend.dispose?.();
+});
 test('audio/video controls stay behind an explicit play action and unsafe document types stay download-only', async () => {
   for (const mimeType of ['audio/wav', 'video/mp4', 'application/pdf', 'text/html']) {
     const h = harness();
@@ -686,16 +747,17 @@ test('audio/video controls stay behind an explicit play action and unsafe docume
 
 test('compact styles are module-scoped, wrap multiple files and constrain long filenames', async () => {
   const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
-  assert.match(css, /\.cf-upload-button\s*\{[^}]*width:\s*2\.5rem;[^}]*height:\s*2\.5rem;[^}]*border:\s*0;[^}]*border-radius:\s*50%;[^}]*background:\s*transparent;/s);
-  assert.match(css, /box-shadow:\s*inset 0 0 0 1px/);
-  assert.match(css, /\.cf-card\s*\{[^}]*grid-template-columns:\s*3rem minmax\(0, 1fr\) 4rem;[^}]*width:\s*min\(17\.5rem, 75vw\);[^}]*max-width:\s*100%;[^}]*height:\s*4\.5rem;/s);
+  assert.doesNotMatch(css, /\.cf-(?:upload-button|icon-button|button)\b/, 'generic button appearance belongs to the host');
+  assert.doesNotMatch(css, /var\(--(?!ck-|cf-)/, 'only public host tokens or module-owned business tokens');
+  assert.doesNotMatch(css, /:hover|cursor:/, 'generic hover and interaction appearance use public CSS');
+  assert.match(css, /\.cf-card\s*\{[^}]*grid-template-columns:\s*3rem minmax\(0, 1fr\) var\(--cf-actions-width\);[^}]*width:\s*min\(17\.5rem, 75vw\);[^}]*max-width:\s*100%;[^}]*height:\s*4\.5rem;/s);
   assert.match(css, /\.cf-attachment\s*\{[^}]*flex:\s*0 0 auto;[^}]*width:\s*min\(17\.5rem, 75vw\);/s);
   assert.match(css, /\.cf-thumbnail\s*\{[^}]*width:\s*3rem;[^}]*height:\s*3rem;/s);
   assert.match(css, /\.cf-thumbnail\s*\{[^}]*grid-template:\s*minmax\(0, 1fr\) \/ minmax\(0, 1fr\);/s);
   assert.match(css, /\.cf-name-stem\s*\{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/s);
   assert.match(css, /\.cf-name-extension\s*\{[^}]*max-width:\s*45%;/s);
   assert.match(css, /\.cf-card-details\s*\{[^}]*grid-template-rows:\s*1\.25rem 1\.125rem 0\.25rem;/s);
-  assert.match(css, /\.cf-card-actions\s*\{[^}]*justify-content:\s*flex-end;[^}]*width:\s*4rem;/s);
+  assert.match(css, /\.cf-card-actions\s*\{[^}]*justify-content:\s*flex-end;[^}]*width:\s*var\(--cf-actions-width\);/s);
   assert.match(css, /\.cf-media\s*\{[^}]*object-fit:\s*contain;/s);
   assert.match(css, /\.cf-attachment-list\s*\{[^}]*flex-wrap:\s*wrap;/s);
   assert.doesNotMatch(css, /22rem|11rem|\b(?:body|html|:root)\b|\.chat-|line-clamp/);
@@ -717,7 +779,7 @@ test('full names and errors are accessible on touch while all tile information a
     const actions = descendants(card).find(element => element.props.className === 'cf-card-actions')!;
     assert.equal(descendants(actions).filter(element => element.type === 'button').length, 2);
     assert.equal(descendants(info).some(element => element.type === 'button'), false);
-    const openButton = descendants(card).find(element => element.props.className === 'cf-card-open')!;
+    const openButton = descendants(card).find(element => element.props.className === 'ck-button cf-card-open')!;
     assert.equal(openButton.type, 'button');
     assert.equal(openButton.props.title, name);
     const stem = descendants(info).find(element => element.props.className === 'cf-name-stem')!;
@@ -733,7 +795,7 @@ test('full names and errors are accessible on touch while all tile information a
     assert.equal(descendants(dialog).some(element => ['img', 'video', 'iframe', 'object'].includes(String(element.type))), false);
     (dialog.props.onClose as () => void)();
     tree = render();
-    const errorButton = descendants(tree).find(element => element.props.className === 'cf-card-open')!;
+    const errorButton = descendants(tree).find(element => element.props.className === 'ck-button cf-card-open')!;
     assert.match(String(errorButton.props['aria-description']), /upload limit/);
     (errorButton.props.onClick as () => void)();
     assert.ok(descendants(render()).some(element => element.type === 'dialog'));
@@ -752,16 +814,21 @@ test('one card-level button previews its image, while action buttons remain sibl
   const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
   render(); h.flushEffects();
   let tree = render();
-  const trigger = descendants(tree).find(element => element.props.className === 'cf-card-open')!;
+  const trigger = descendants(tree).find(element => element.props.className === 'ck-button cf-card-open')!;
   assert.equal(trigger.props['aria-label'], '查看 Long image name.png');
   assert.equal(descendants(tree).filter(element => element.props['aria-haspopup'] === 'dialog').length, 1);
   assert.equal(descendants(tree).find(element => element.props.className === 'cf-thumbnail')!.type, 'span');
   assert.equal(descendants(tree).find(element => element.props.className === 'cf-card-name')!.type, 'span');
   assert.equal(descendants(trigger).some(element => element.type === 'a'), false, 'download is not nested inside preview');
+  assert.ok(descendants(trigger).some(element => element.props.className === 'cf-thumbnail'));
+  assert.ok(descendants(trigger).some(element => element.props.className === 'cf-card-name'));
+  assert.equal(tree.props['aria-label'], undefined, 'the main action, not a second group label, names the file');
   assert.equal(tree.props.onClick, undefined, 'actions cannot bubble to a container preview handler');
   (trigger.props.onClick as () => void)();
   tree = render();
   const original = descendants(tree).find(element => element.type === 'dialog')!;
+  const portal = descendants(tree).find(element => element.type === 'fixture-portal')!;
+  assert.ok(descendants(portal).includes(original), 'the flow-content dialog is mounted through the portal');
   assert.equal(original.props['aria-label'], '预览 Long image name.png');
   assert.equal(descendants(original).filter(element => element.type === 'img').length, 1);
   node = { ...node, attachment: { type: 'blob', mimeType: 'image/svg+xml',
@@ -769,7 +836,7 @@ test('one card-level button previews its image, while action buttons remain sibl
   render(); h.flushEffects();
   tree = render();
   assert.equal(descendants(tree).some(element => element.type === 'dialog'), false);
-  (descendants(tree).find(element => element.props.className === 'cf-card-open')!.props.onClick as () => void)();
+  (descendants(tree).find(element => element.props.className === 'ck-button cf-card-open')!.props.onClick as () => void)();
   tree = render();
   const next = descendants(tree).find(element => element.type === 'dialog')!;
   assert.notEqual(next.props.key, original.props.key);
@@ -781,11 +848,11 @@ test('one card-level button previews its image, while action buttons remain sibl
 
 test('preview target covers the tile without adding a grid row or an external focus outline', async () => {
   const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
-  assert.match(css, /\.cf-card-open\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;/s);
-  assert.match(css, /\.cf-card \.cf-card-open:focus-visible\s*\{[^}]*outline:\s*2px solid[^}]*outline-offset:\s*-3px;/s);
-  assert.match(css, /\.cf-card-details\s*\{[^}]*pointer-events:\s*none;/s);
+  assert.match(css, /\.cf-card-open\s*\{[^}]*display:\s*grid;[^}]*grid-column:\s*1 \/ -1;[^}]*width:\s*100%;[^}]*height:\s*100%;/s);
+  assert.match(css, /\.cf-card \.cf-card-open:focus-visible\s*\{\s*outline-offset:\s*-3px;/s);
+  assert.doesNotMatch(css, /\.cf-(?:card-details|thumbnail)\s*\{[^}]*pointer-events:\s*none;/s);
   assert.match(css, /\.cf-card-actions\s*\{[^}]*pointer-events:\s*none;/s);
-  assert.match(css, /\.cf-icon-button\s*\{[^}]*z-index:\s*1;[^}]*pointer-events:\s*auto;/s);
+  assert.match(css, /\.cf-card-actions > button,\s*\.cf-card-actions > a\s*\{[^}]*pointer-events:\s*auto;/s);
   assert.doesNotMatch(css, /cf-preview-button|cf-card-name:focus-visible|cf-card-status:focus-visible/);
 });
 
@@ -798,7 +865,7 @@ test('a card opened before image metadata arrives becomes the preview rather tha
     target: './image.svg', label: 'Loading image' };
   const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
   let tree = render(); h.flushEffects();
-  (descendants(tree).find(element => element.props.className === 'cf-card-open')!.props.onClick as () => void)();
+  (descendants(tree).find(element => element.props.className === 'ck-button cf-card-open')!.props.onClick as () => void)();
   tree = render();
   const initial = descendants(tree).find(element => element.type === 'dialog')!;
   let opens = 0, closes = 0;
