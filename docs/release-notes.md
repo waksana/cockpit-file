@@ -1,8 +1,9 @@
 # Cockpit File 0.1.2
 
-Unreleased fixed-layout file-card update for Cockpit Module API v1.
+Fixed-layout file-card update for Cockpit Module API v1.
 
 - Keep draft/message cards at 280 x 72px at the default font size across loading, ready, submission and error states.
+- Narrow screens share a viewport width cap (240 x 72px at a 320px viewport) without changing the host's message arrangement.
 - Use two bounded information lines, a reserved activity track and fixed right-side icon actions.
 - Add keyboard/touch-accessible full filename and error details; preserve bounded extensions while truncating long names.
 - Fit whole images inside 48px thumbnails and refine the centered attachment icon's stroke and bounds.
