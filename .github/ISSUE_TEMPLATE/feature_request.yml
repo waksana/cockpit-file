@@ -1,0 +1,21 @@
+name: Feature request / 功能建议
+description: Describe a user need and the smallest useful change.
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: User need / 使用需求
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed scope / 建议范围
+      description: Explain why this belongs in the file module rather than the generic host.
+    validations:
+      required: true
+  - type: textarea
+    id: tradeoffs
+    attributes:
+      label: Alternatives and tradeoffs / 替代方案与取舍

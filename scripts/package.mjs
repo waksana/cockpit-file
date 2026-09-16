@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { lstat, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, writeFile, rm, rmdir } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkedBuild } from './build-identity.mjs';
 
 async function regularTree(directory) {
   if (!(await lstat(directory)).isDirectory()) throw new Error(`Not a build directory: ${directory}`);
@@ -30,17 +31,29 @@ export async function packageModule(root, output) {
   }
   await regularTree(join(root, 'dist'));
   if (!(await lstat(join(root, 'LICENSE'))).isFile()) throw new Error('Missing module license');
+  await checkedBuild(root);
   await mkdir(output);
   const name = `${manifest.id}-${manifest.version}.tgz`;
   const archive = join(output, name);
-  const result = spawnSync('tar', ['--sort=name', '--mtime=@0', '--owner=0', '--group=0', '--numeric-owner',
-    '--hard-dereference', '-czf', archive, 'cockpit.module.json', 'dist', 'LICENSE'], { cwd: root, stdio: 'pipe' });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`tar failed (${result.status}): ${result.stderr.toString()}`);
-  const hash = createHash('sha256');
-  for await (const bytes of createReadStream(archive)) hash.update(bytes);
-  await writeFile(`${archive}.sha256`, `${hash.digest('hex')}  ${name}\n`, { flag: 'wx' });
-  return archive;
+  try {
+    const result = spawnSync('tar', ['--sort=name', '--mtime=@0', '--owner=0', '--group=0', '--numeric-owner',
+      '--hard-dereference', '--transform=s/^\\.module-build\\.json$/module-build.json/',
+      '-czf', archive, 'cockpit.module.json', 'dist', 'LICENSE', '.module-build.json'], { cwd: root, stdio: 'pipe' });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`tar failed (${result.status}): ${result.stderr.toString()}`);
+    await checkedBuild(root);
+    const hash = createHash('sha256');
+    for await (const bytes of createReadStream(archive)) hash.update(bytes);
+    await writeFile(`${archive}.sha256`, `${hash.digest('hex')}  ${name}\n`, { flag: 'wx' });
+    return archive;
+  } catch (error) {
+    try {
+      await rm(`${archive}.sha256`, { force: true });
+      await rm(archive, { force: true });
+      await rmdir(output);
+    } catch (cleanup) { throw new AggregateError([error, cleanup], 'Packaging failed and output cleanup failed'); }
+    throw error;
+  }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
