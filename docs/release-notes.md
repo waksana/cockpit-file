@@ -1,6 +1,6 @@
 # Cockpit File 0.1.4
 
-Unreleased preview interaction update for Cockpit Module API v1.
+Preview interaction update for Cockpit Module API v1.
 
 - The card body, filename and thumbnail share one accessible preview target; download, remove and retry stay independent.
 - Image/media titles open the actual preview, not a separate text-only dialog. Non-previewable files retain full details.
@@ -48,6 +48,12 @@ The module runs as trusted host-process code and may capture local files readabl
 Do not expose module routes without the host's authenticated access boundary.
 
 ## Known limitation
+
+The preview change contains the focus ring within the tile; it does not remove
+normal keyboard focus. The separately reported horizontal line after mouse-close
+was not reliably reproduced, so this release does not claim a confirmed fix for
+every such artifact. The broader interaction/structure review is tracked in
+[waksana/cockpit#17](https://github.com/waksana/cockpit/issues/17).
 
 Discard eligibility is local to the originating browser activation, not a global reference count.
 A duplicated tab can restore the same attachment path and submit it while the original tab still
