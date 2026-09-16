@@ -141,7 +141,7 @@ test('failed upload retains its File and operation ID for an explicit retry', as
   await settle();
   assert.match(store.snapshot(draft).items[0]!.error!, /Disk busy/);
   assert.equal(draft.blocks, 1);
-  assert.equal(errors.length, 1);
+  assert.equal(errors.length, 0, 'the file item owns its upload error, without a second global notification');
   store.retry(draft, 'operation-1');
   assert.equal(calls[1]!.path, calls[0]!.path);
   assert.equal(calls[1]!.init!.body, file);

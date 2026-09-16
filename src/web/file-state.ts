@@ -303,7 +303,6 @@ export class UploadStore {
     } catch (error) {
       if (this.disposed || controller.signal.aborted || !scope.entries.includes(entry)) return;
       this.replace(scope, entry, { ...entry, controller: undefined, status: 'failed', error: message(error) });
-      this.options.report(error);
       this.publish(scope);
     }
   }
@@ -357,7 +356,6 @@ export class UploadStore {
         if (this.disposed) return;
         const detail = `Could not add uploaded files to the draft: ${message(error)}`;
         for (const entry of ready) this.replace(scope, entry, { ...entry, status: 'failed', error: detail });
-        this.options.report(error);
         return;
       }
       if (this.disposed) return;
