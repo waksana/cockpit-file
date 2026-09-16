@@ -6,7 +6,7 @@ const MAX_ATTACHMENTS = 20;
 
 type Request = ModuleFrontendContext['request'];
 type Report = ModuleFrontendContext['report'];
-type UploadStatus = 'uploading' | 'failed' | 'reselect' | 'ready';
+type UploadStatus = 'uploading' | 'failed' | 'ready';
 
 export interface UploadItem {
   readonly id: string;
@@ -25,6 +25,7 @@ interface UploadEntry extends UploadItem {
   file?: File;
   result?: DraftAttachment;
   controller?: AbortController;
+  attached?: boolean;
 }
 
 interface UploadScope {
@@ -36,19 +37,12 @@ interface UploadScope {
   error?: string;
 }
 
-interface PendingStorage {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-  removeItem(key: string): void;
-}
-
 interface UploadOptions {
   request: Request;
   report: Report;
   apiBase: string;
   nativePathPrefix: string;
   maxBytes?: number;
-  storage?: PendingStorage;
   operationId?: () => string;
 }
 
@@ -104,13 +98,10 @@ async function uploadError(response: Response): Promise<Error> {
 export class UploadStore {
   private readonly scopes = new Map<string, UploadScope>();
   private readonly options: UploadOptions;
-  private readonly storageKey: string;
   private disposed = false;
 
   constructor(options: UploadOptions) {
     this.options = options;
-    this.storageKey = `cf-pending:${options.apiBase}`;
-    this.restore();
   }
 
   private scope(sessionId: string): UploadScope {
@@ -135,17 +126,13 @@ export class UploadStore {
 
   private bind(draft: ModuleDraft): UploadScope {
     const scope = this.scope(draft.sessionId);
+    if (scope.draft) this.prune(scope, scope.draft.getSnapshot().attachments);
     if (!scope.draft || scope.entries.length === 0) scope.draft = draft;
-    const attached = new Set(scope.draft.getSnapshot().attachments.map(item => item.id));
-    const restored = scope.entries.filter(entry => entry.status !== 'reselect' || !attached.has(`cf-upload:${entry.id}`));
-    if (restored.length !== scope.entries.length) {
-      scope.entries = restored;
-      this.publish(scope);
-    }
     if (scope.entries.length && !scope.release) scope.release = scope.draft.block('请等待文件上传完成，或移除未完成的附件');
     if (!scope.entries.length && scope.release) {
-      scope.release();
+      const release = scope.release;
       scope.release = undefined;
+      release();
     }
     return scope;
   }
@@ -157,7 +144,8 @@ export class UploadStore {
       this.reject(scope, 'Files can only be attached to an available prompt.');
       return;
     }
-    if (context.draft.getSnapshot().attachments.length + scope.entries.length + files.length > MAX_ATTACHMENTS) {
+    const pending = scope.entries.filter(entry => !entry.attached).length;
+    if (scope.draft!.getSnapshot().attachments.length + pending + files.length > MAX_ATTACHMENTS) {
       this.reject(scope, `A prompt supports at most ${MAX_ATTACHMENTS} attachments. Remove a file before adding more.`);
       return;
     }
@@ -182,7 +170,7 @@ export class UploadStore {
   retry(draft: ModuleDraft, id: string): void {
     if (this.disposed) return;
     const scope = this.bind(draft);
-    const entry = scope.entries.find(item => item.id === id);
+    const entry = scope.entries.find(item => item.id === id && !item.attached);
     if (!entry || entry.status !== 'failed' || (!entry.file && !entry.result)) return;
     this.replace(scope, entry, { ...entry, status: entry.result ? 'ready' : 'uploading', error: undefined });
     if (entry.result) {
@@ -198,7 +186,7 @@ export class UploadStore {
   remove(draft: ModuleDraft, id: string): void {
     if (this.disposed) return;
     const scope = this.bind(draft);
-    const entry = scope.entries.find(item => item.id === id);
+    const entry = scope.entries.find(item => item.id === id && !item.attached);
     if (!entry) return;
     scope.entries = scope.entries.filter(item => item !== entry);
     entry.controller?.abort();
@@ -272,88 +260,65 @@ export class UploadStore {
     };
   }
 
+  private prune(scope: UploadScope, attachments: readonly DraftAttachment[]): void {
+    const existing = new Set(attachments.map(item => item.id));
+    scope.entries = scope.entries.filter(entry => !entry.attached || existing.has(entry.result!.id));
+    // Only a successful suffix behind unresolved selections can still need reordering.
+    const firstPending = scope.entries.findIndex(entry => !entry.attached);
+    scope.entries.splice(0, firstPending === -1 ? scope.entries.length : firstPending);
+  }
+
   private flush(scope: UploadScope): void {
-    const ready: DraftAttachment[] = [];
-    for (const entry of scope.entries) {
-      if (entry.status !== 'ready' || !entry.result) break;
-      ready.push(entry.result);
-    }
+    if (this.disposed) return;
+    const attachments = scope.draft!.getSnapshot().attachments;
+    this.prune(scope, attachments);
+    const firstReady = scope.entries.findIndex(entry => entry.status === 'ready' && !entry.attached);
+    const ordered = firstReady === -1 ? [] : scope.entries.slice(firstReady).filter(entry => entry.status === 'ready');
+    const ready = ordered.filter(entry => !entry.attached);
     if (ready.length) {
       try {
-        const existing = new Set(scope.draft!.getSnapshot().attachments.map(item => item.id));
-        const missing = ready.filter(item => !existing.has(item.id));
-        if (missing.length) scope.draft!.appendAttachments(missing);
+        const existing = new Map(attachments.map(item => [item.id, item]));
+        // Host upsert moves these IDs to the tail. Reuse only still-present later
+        // successes, so early acknowledgements persist without reviving removals.
+        scope.draft!.appendAttachments(ordered.map(entry => entry.attached ? existing.get(entry.result!.id)! : entry.result!));
       } catch (error) {
+        if (this.disposed) return;
         const detail = `Could not add uploaded files to the draft: ${message(error)}`;
-        for (let index = 0; index < ready.length; index++) {
-          scope.entries[index] = { ...scope.entries[index]!, status: 'failed', error: detail };
-        }
+        for (const entry of ready) this.replace(scope, entry, { ...entry, status: 'failed', error: detail });
         this.options.report(error);
         return;
       }
-      scope.entries.splice(0, ready.length);
+      if (this.disposed) return;
+      for (const entry of ready) this.replace(scope, entry, { ...entry, attached: true });
+      this.prune(scope, scope.draft!.getSnapshot().attachments);
     }
     if (scope.entries.length === 0) {
-      scope.release?.();
+      const release = scope.release;
       scope.release = undefined;
+      release?.();
     }
   }
 
   private publish(scope: UploadScope): void {
+    if (this.disposed) return;
     scope.snapshot = {
-      items: scope.entries.map(({ id, name, size, status, error }) => ({ id, name, size, status, ...(error ? { error } : {}) })),
+      items: scope.entries.filter(entry => !entry.attached)
+        .map(({ id, name, size, status, error }) => ({ id, name, size, status, ...(error ? { error } : {}) })),
       ...(scope.error ? { error: scope.error } : {}),
     };
-    this.persist();
     for (const listener of scope.listeners) listener();
-  }
-
-  private restore(): void {
-    try {
-      const raw = this.options.storage?.getItem(this.storageKey);
-      if (!raw || raw.length > 1_048_576) return;
-      const value: unknown = JSON.parse(raw);
-      if (!Array.isArray(value)) return;
-      for (const item of value.slice(0, 2_000)) {
-        if (!item || typeof item !== 'object' || typeof item.sessionId !== 'string' ||
-            typeof item.id !== 'string' || typeof item.name !== 'string' ||
-            typeof item.size !== 'number' || !Number.isSafeInteger(item.size) || item.size < 0) continue;
-        const scope = this.scope(item.sessionId);
-        if (scope.entries.length >= MAX_ATTACHMENTS || scope.entries.some(entry => entry.id === item.id)) continue;
-        scope.entries.push({
-          id: item.id, name: item.name, size: item.size, status: 'reselect',
-          error: 'Upload interrupted by refresh. Remove this item and select the local file again.',
-        });
-        scope.snapshot = { items: scope.entries.map(({ id, name, size, status, error }) => ({ id, name, size, status, error })) };
-      }
-    } catch (error) {
-      this.options.report(error);
-    }
-  }
-
-  private persist(): void {
-    if (!this.options.storage) return;
-    const items = [...this.scopes].flatMap(([sessionId, scope]) =>
-      scope.entries.map(({ id, name, size }) => ({ sessionId, id, name, size })),
-    );
-    try {
-      if (items.length) this.options.storage.setItem(this.storageKey, JSON.stringify(items));
-      else this.options.storage.removeItem(this.storageKey);
-    } catch (error) {
-      this.options.report(error);
-    }
   }
 
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.persist();
     for (const scope of this.scopes.values()) {
       scope.listeners.clear();
       for (const entry of scope.entries) entry.controller?.abort();
-      scope.release?.();
+      const release = scope.release;
       scope.release = undefined;
       scope.entries = [];
+      release?.();
     }
     this.scopes.clear();
   }
