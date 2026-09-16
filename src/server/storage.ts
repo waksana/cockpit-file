@@ -213,7 +213,7 @@ const INLINE_MIMES = new Set([
 ]);
 function svgPrefix(prefix: Buffer): boolean {
   let text = prefix.toString('utf8').replace(/^\uFEFF/, '').trimStart();
-  if (text.startsWith('<?xml ')) {
+  if (/^<\?xml[\t\n\r ]/.test(text)) {
     const end = text.indexOf('?>');
     if (end < 0) return false;
     text = text.slice(end + 2).trimStart();

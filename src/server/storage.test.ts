@@ -318,7 +318,8 @@ test('MIME comes from bytes, not supplied labels; HTML never receives an active 
 test('SVG recognition accepts bounded XML preambles and preserves original bytes for image-mode rendering', async t => {
   const { storage, parent } = await fixture(t);
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><style>rect{fill:red}</style><rect width="20" height="20"/></svg>';
-  for (const [index, preamble] of ['', '\uFEFF \n', '<?xml version="1.0" encoding="UTF-8"?>\n', '<!-- drawing -->\n<!-- generated -->\n'].entries()) {
+  for (const [index, preamble] of ['', '\uFEFF \n', '<?xml version="1.0" encoding="UTF-8"?>\n',
+    '<?xml\nversion="1.0"?>\n', '<!-- drawing -->\n<!-- generated -->\n'].entries()) {
     const source = preamble + svg;
     const saved = await storage.upload(`svg-${index}`, bytes(source), 'drawing.txt', 'text/plain');
     assert.equal(saved.mime, 'image/svg+xml');
