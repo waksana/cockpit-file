@@ -1,17 +1,20 @@
 # 下载、构建与安装
 
-**cockpit-file 0.1.1 开发版本** 需要固定 **Cockpit 0.2.0** 源码或对应运行包；
+**cockpit-file 0.1.1** 需要固定 **Cockpit 0.2.0** 源码或兼容的后续运行包；
 不能对已发布的 Cockpit v0.1.0 直接执行模块命令。
 
-本次输入区配套调整位于 [waksana/cockpit#7](https://github.com/waksana/cockpit/pull/7)，
+本次输入区配套调整已通过 [waksana/cockpit#7](https://github.com/waksana/cockpit/pull/7) 合入，
 当前固定提交记录在 [`tooling/host-sdk.json`](../tooling/host-sdk.json)。
-0.1.1 尚未发布，不能直接配合缺少 rendersDraftAttachments 声明支持的旧宿主；
+0.1.1 不能直接配合缺少 rendersDraftAttachments 声明支持的旧宿主；
 已发布的 0.1.0 使用对应 tag 的文档和构建基线。
 
 普通安装从 [GitHub Releases](https://github.com/waksana/cockpit-file/releases)
 下载同一版本的 `cockpit-file-X.Y.Z.tgz` 和 `.tgz.sha256`，
 执行 `sha256sum -c cockpit-file-X.Y.Z.tgz.sha256` 后按下方安装步骤启用。
 Source code ZIP/tar 不是模块安装包。只有源码开发需要执行 SDK 准备和构建步骤。
+
+安装前了解[复制标签页与删除的已知限制](release-notes.md#known-limitation)：
+本地删除资格不等于全局无引用，不要在一个标签页移除另一副本仍要发送或读取的附件。
 
 ## 1. 条件
 
