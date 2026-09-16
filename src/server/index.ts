@@ -72,7 +72,9 @@ function fileHeaders(file: FileMetadata, download: boolean): Record<string, stri
     'Content-Length': String(file.size),
     'Content-Disposition': `${download || !file.inline ? 'attachment' : 'inline'}; filename*=UTF-8''${name}`,
     'X-Content-Type-Options': 'nosniff',
-    'Content-Security-Policy': "sandbox; default-src 'none'",
+    'Content-Security-Policy': file.mime === 'image/svg+xml'
+      ? "sandbox; default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+      : "sandbox; default-src 'none'",
     'Cache-Control': 'private, max-age=31536000, immutable',
     'Accept-Ranges': 'bytes',
     ETag: `"${file.sha256}"`,

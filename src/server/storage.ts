@@ -207,9 +207,24 @@ function parseIdentity(value: unknown): Identity {
   throw failure('CORRUPT', 'Invalid stored identity');
 }
 const INLINE_MIMES = new Set([
-  'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif',
+  'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/svg+xml',
   'audio/wav', 'audio/mpeg', 'audio/ogg', 'audio/mp4', 'video/ogg', 'video/mp4', 'video/webm',
 ]);
+function svgPrefix(prefix: Buffer): boolean {
+  let text = prefix.toString('utf8').replace(/^\uFEFF/, '').trimStart();
+  if (text.startsWith('<?xml ')) {
+    const end = text.indexOf('?>');
+    if (end < 0) return false;
+    text = text.slice(end + 2).trimStart();
+  }
+  while (text.startsWith('<!--')) {
+    const end = text.indexOf('-->');
+    if (end < 0) return false;
+    text = text.slice(end + 3).trimStart();
+  }
+  // MIME recognition only: SVG is rendered as an image, never inserted as page markup.
+  return /^<svg(?:[\t\n\r ][^>]*|\/?)>/.test(text);
+}
 function sniff(prefix: Buffer): string {
   if (prefix.length >= 24 && prefix.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) &&
       prefix.toString('ascii', 12, 16) === 'IHDR') return 'image/png';
@@ -239,12 +254,14 @@ function sniff(prefix: Buffer): string {
       ((prefix[2] ?? 0) & 0xf0) !== 0 && ((prefix[2] ?? 0) & 0x0c) !== 0x0c) return 'audio/mpeg';
   if (prefix.length >= 12 && prefix.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])) &&
       prefix.includes(Buffer.from('webm'))) return 'video/webm';
+  if (svgPrefix(prefix)) return 'image/svg+xml';
   return 'application/octet-stream';
 }
 function bodyName(name: string, mime: string): string {
   const canonical: Record<string, string> = {
     'image/png': '.png', 'image/jpeg': '.jpg', 'image/gif': '.gif', 'image/webp': '.webp',
     'image/avif': '.avif', 'audio/wav': '.wav', 'audio/mpeg': '.mp3', 'audio/ogg': '.ogg',
+    'image/svg+xml': '.svg',
     'audio/mp4': '.m4a', 'video/ogg': '.ogv', 'video/mp4': '.mp4', 'video/webm': '.webm',
   };
   const extension = extname(name).toLowerCase();

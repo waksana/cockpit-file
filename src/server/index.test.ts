@@ -93,6 +93,32 @@ test('historical completions and resource reads cannot import a local file', asy
   assert.equal((await f.request('HEAD', '/messages/*', { params: { '*': 'invalid!' } })).status, 400);
 });
 
+test('SVG originals use image MIME with sandboxed resource headers and explicit downloads', async t => {
+  const f = await fixture(t);
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><style>rect{fill:red}</style><rect width="20" height="20"/><script>void 0</script></svg>';
+  const uploaded = await f.request('POST', '/upload', {
+    query: { name: 'drawing.svg', operationId: 'svg-upload' }, body: Readable.from([Buffer.from(svg)]),
+  });
+  const value = uploaded.body as { fileId: string; mime: string };
+  assert.equal(value.mime, 'image/svg+xml');
+  const params = { fileId: value.fileId, body: 'body.svg' };
+  const preview = await f.request('GET', '/files/:fileId/:body', { params });
+  assert.equal(preview.headers?.['Content-Type'], 'image/svg+xml');
+  assert.match(preview.headers?.['Content-Disposition'] ?? '', /^inline;/);
+  assert.equal(preview.headers?.['X-Content-Type-Options'], 'nosniff');
+  assert.equal(preview.headers?.['Content-Security-Policy'],
+    "sandbox; default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+  assert.ok(preview.body instanceof Readable);
+  assert.equal(Buffer.concat(await preview.body.toArray()).toString(), svg);
+  const download = await f.request('HEAD', '/files/:fileId/:body', { params, query: { download: '1' } });
+  assert.match(download.headers?.['Content-Disposition'] ?? '', /^attachment;/);
+  await writeFile(join(f.cwd, 'picture.svg'), svg);
+  await f.event('assistant.message_start', 'svg-message');
+  await f.event('assistant.message_delta', 'svg-message', { deltaContent: '![picture](./picture.svg)' });
+  const head = await f.ready(() => f.messageHead('svg-message', './picture.svg'));
+  assert.equal(head.headers?.['Content-Type'], 'image/svg+xml');
+  assert.deepEqual(f.errors, []);
+});
 test('new deltas capture once across fragment boundaries and new messages preserve different versions', async t => {
   const f = await fixture(t);
   await writeFile(join(f.cwd, 'a b.txt'), 'version one');

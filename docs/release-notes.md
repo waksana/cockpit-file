@@ -1,6 +1,11 @@
-# Cockpit File 0.1.2
+# Cockpit File 0.1.3
 
-Fixed-layout file-card update for Cockpit Module API v1.
+Unreleased SVG preview update for Cockpit Module API v1.
+
+- Recognize newly stored SVG bytes and preview them through the existing image-card path.
+- Keep SVG in image mode rather than injecting markup, with sandboxed resource headers,
+  blocked external resources/scripts and permitted inline drawing styles.
+- Preserve original downloads and existing snapshot MIME; no historical capture or data migration.
 
 - Keep draft/message cards at 280 x 72px at the default font size across loading, ready, submission and error states.
 - Narrow screens share a viewport width cap (240 x 72px at a 320px viewport) without changing the host's message arrangement.
