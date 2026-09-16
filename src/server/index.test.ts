@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
@@ -142,4 +142,85 @@ test('new references use the current native working directory without changing a
   await f.event('assistant.message_delta', 'moving', { deltaContent: '[after](./after.txt)' }, other);
   await f.ready(() => f.messageHead('moving', './after.txt'));
   assert.deepEqual(f.errors, []);
+});
+
+test('DELETE uploads returns 204, removes the original, and returns ordinary missing reads and terminal retries', async t => {
+  const f = await fixture(t);
+  const uploaded = await f.request('POST', '/upload', {
+    query: { name: 'draft.txt', operationId: 'draft-discard' }, body: Readable.from([Buffer.from('draft')]),
+  });
+  const body = uploaded.body as { fileId: string; attachment: { path: string } };
+  const params = { operationId: 'draft-discard' };
+  for (let repeat = 0; repeat < 2; repeat++) {
+    const response = await f.request('DELETE', '/uploads/:operationId', { params });
+    assert.equal(response.status, 204);
+    assert.equal(response.body, undefined);
+    assert.equal(response.headers?.['Cache-Control'], 'no-store');
+  }
+  await assert.rejects(stat(body.attachment.path), { code: 'ENOENT' });
+  for (const method of ['GET', 'HEAD']) {
+    const response = await f.request(method, '/files/:fileId/:body', { params: { fileId: body.fileId, body: 'body.txt' } });
+    assert.equal(response.status, 404);
+    assert.equal(response.headers?.['X-File-State'], 'missing');
+  }
+  const retry = await f.request('POST', '/upload', {
+    query: { name: 'draft.txt', operationId: 'draft-discard' }, body: Readable.from([Buffer.from('draft')]),
+  });
+  assert.equal(retry.status, 410);
+  assert.equal((retry.body as { code: string }).code, 'DISCARDED');
+});
+
+test('DELETE bypasses the upload queue, cancels its active upload, and fences a not-yet-started upload', async t => {
+  const f = await fixture(t, { maxConcurrent: 1 });
+  const input = new Readable({ read() {} });
+  const active = f.request('POST', '/upload', {
+    query: { name: 'active.txt', operationId: 'active' }, body: input,
+  });
+  const queued = f.request('POST', '/upload', {
+    query: { name: 'queued.txt', operationId: 'queued' }, body: Readable.from([Buffer.from('queued')]),
+  });
+  const disconnected = new AbortController();
+  disconnected.abort(new Error('browser disconnected'));
+  const removedQueued = await f.request('DELETE', '/uploads/:operationId', {
+    params: { operationId: 'queued' }, signal: disconnected.signal,
+  });
+  assert.equal(removedQueued.status, 204);
+  const removedActive = await f.request('DELETE', '/uploads/:operationId', { params: { operationId: 'active' } });
+  assert.equal(removedActive.status, 204);
+  assert.equal((await active).status, 409);
+  assert.equal((await queued).status, 410);
+  assert.equal(input.destroyed, true);
+  for (const id of await readdir(join(f.root, 'data', 'files'))) {
+    assert.deepEqual((await readdir(join(f.root, 'data', 'files', id))).sort(), ['discarded.json', 'identity.json']);
+  }
+});
+
+test('DELETE reports invalid operation identities, unknown ownership, and storage errors explicitly', async t => {
+  const f = await fixture(t);
+  for (const operationId of ['', '../body', '/native/path', 'bad\nid', `f_${'a'.repeat(64)}`]) {
+    const invalid = await f.request('DELETE', '/uploads/:operationId', { params: { operationId } });
+    assert.equal(invalid.status, 400);
+    assert.equal((invalid.body as { code: string }).code, 'INVALID_INPUT');
+  }
+  const uploaded = await f.request('POST', '/upload', {
+    query: { name: 'foreign.txt', operationId: 'foreign' }, body: Readable.from([Buffer.from('keep')]),
+  });
+  const body = uploaded.body as { fileId: string };
+  const slot = join(f.root, 'data', 'files', body.fileId);
+  await mkdir(join(slot, 'attempt'), { mode: 0o700 });
+  const foreign = await f.request('DELETE', '/uploads/:operationId', { params: { operationId: 'foreign' } });
+  assert.equal(foreign.status, 409);
+  assert.equal((foreign.body as { code: string }).code, 'ACTIVITY_UNKNOWN');
+  await assert.rejects(stat(join(slot, 'discarded.json')), { code: 'ENOENT' });
+  const disconnected = new AbortController();
+  disconnected.abort();
+  assert.equal((await f.request('DELETE', '/uploads/:operationId', {
+    params: { operationId: 'foreign' }, signal: disconnected.signal,
+  })).status, 409);
+  assert.equal(f.errors.length, 1, 'discard failures after disconnect are still reported to the host');
+  await rm(join(slot, 'attempt'), { recursive: true });
+  await mkdir(join(slot, 'discarded.json'), { mode: 0o700 });
+  const failure = await f.request('DELETE', '/uploads/:operationId', { params: { operationId: 'foreign' } });
+  assert.equal(failure.status, 500);
+  assert.equal((failure.body as { code: string }).code, 'IO_ERROR');
 });
