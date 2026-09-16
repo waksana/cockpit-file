@@ -6,8 +6,8 @@
 **未发布的配套 UI 变更：** 此分支前端另要求 `context.uiVersion === 1`
 及公共 `context.createPortal`，旧宿主会被明确拒绝；不能仅凭宿主版本号或 API v1 推断支持。
 公共规则见宿主[模块 UI 指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md)。
-当前 `tooling/host-sdk.json` 固定包含该能力的真实宿主提交
-[`c84f7bc6b45373560ce09cf21ccd9a3519913be2`](https://github.com/waksana/cockpit/commit/c84f7bc6b45373560ce09cf21ccd9a3519913be2)
+当前 `tooling/host-sdk.json` 固定包含该能力及管理页回读、原生弹窗键盘归属修复的真实宿主提交
+[`79e2946bab382ff68e3cf2a84d42827f011cbe53`](https://github.com/waksana/cockpit/commit/79e2946bab382ff68e3cf2a84d42827f011cbe53)
 （Cockpit 0.2.0 / Module API v1）；已从该干净提交重新导出并核验 SDK，前端直接使用其权威类型。
 此配套提交不表示已发布或已部署。发布前先交付支持该能力的宿主，再发布模块；
 先升级宿主，后升级模块。本次工作不执行发布、部署或重启。
