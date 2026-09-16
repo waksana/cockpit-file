@@ -2,7 +2,7 @@
   "apiVersion": 1,
   "id": "cockpit-file",
   "name": "Files",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "backend": "dist/server/index.js",
   "frontend": {
     "entry": "dist/web/index.js",

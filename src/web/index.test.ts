@@ -713,19 +713,18 @@ test('full names and errors are accessible on touch while all tile information a
     const render = () => h.render(frontend.composerAbove![0]!.component, composer);
     let tree = render();
     const card = descendants(tree).find(element => element.props.className === 'cf-card')!;
-    const slots = children(card);
-    assert.equal(slots[1]!.props.className, 'cf-card-details');
-    assert.equal(slots[2]!.props.className, 'cf-card-actions');
-    assert.equal(descendants(slots[2]).filter(element => element.type === 'button').length, 2);
-    assert.equal(descendants(slots[1]).some(element => /移除|重新上传/.test(String(element.props['aria-label']))), false);
-    const nameButton = descendants(card).find(element => element.props.className === 'cf-card-name')!;
-    assert.equal(nameButton.type, 'button');
-    assert.equal(nameButton.props.title, name);
-    const stem = descendants(nameButton).find(element => element.props.className === 'cf-name-stem')!;
-    const extension = descendants(nameButton).find(element => element.props.className === 'cf-name-extension');
+    const info = descendants(card).find(element => element.props.className === 'cf-card-details')!;
+    const actions = descendants(card).find(element => element.props.className === 'cf-card-actions')!;
+    assert.equal(descendants(actions).filter(element => element.type === 'button').length, 2);
+    assert.equal(descendants(info).some(element => element.type === 'button'), false);
+    const openButton = descendants(card).find(element => element.props.className === 'cf-card-open')!;
+    assert.equal(openButton.type, 'button');
+    assert.equal(openButton.props.title, name);
+    const stem = descendants(info).find(element => element.props.className === 'cf-name-stem')!;
+    const extension = descendants(info).find(element => element.props.className === 'cf-name-extension');
     assert.equal((stem.props.children as string[]).join('') + (extension?.props.children as string[] ?? []).join(''), name);
     assert.equal(extension !== undefined, name.endsWith('.png') || name.endsWith('.tar.gz'));
-    (nameButton.props.onClick as () => void)();
+    (openButton.props.onClick as () => void)();
     tree = render();
     const dialog = descendants(tree).find(element => element.type === 'dialog')!;
     assert.equal(dialog.props['aria-label'], `文件详情 ${name}`);
@@ -734,10 +733,85 @@ test('full names and errors are accessible on touch while all tile information a
     assert.equal(descendants(dialog).some(element => ['img', 'video', 'iframe', 'object'].includes(String(element.type))), false);
     (dialog.props.onClose as () => void)();
     tree = render();
-    const errorButton = descendants(tree).find(element => String(element.props['aria-label']).startsWith('查看文件错误：'))!;
+    const errorButton = descendants(tree).find(element => element.props.className === 'cf-card-open')!;
+    assert.match(String(errorButton.props['aria-description']), /upload limit/);
     (errorButton.props.onClick as () => void)();
     assert.ok(descendants(render()).some(element => element.type === 'dialog'));
     h.unmount();
     frontend.dispose?.();
   }
+});
+
+test('one card-level button previews its image, while action buttons remain siblings and late dialog close stays scoped', async () => {
+  const h = harness();
+  const frontend = await activate(h.context);
+  let node: RenderNode = {
+    kind: 'attachment', origin: { sessionId: 'fixture', messageId: 'card-preview' }, label: 'Long image name.png',
+    attachment: { type: 'blob', mimeType: 'image/png', data: syntheticPng },
+  };
+  const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+  render(); h.flushEffects();
+  let tree = render();
+  const trigger = descendants(tree).find(element => element.props.className === 'cf-card-open')!;
+  assert.equal(trigger.props['aria-label'], '查看 Long image name.png');
+  assert.equal(descendants(tree).filter(element => element.props['aria-haspopup'] === 'dialog').length, 1);
+  assert.equal(descendants(tree).find(element => element.props.className === 'cf-thumbnail')!.type, 'span');
+  assert.equal(descendants(tree).find(element => element.props.className === 'cf-card-name')!.type, 'span');
+  assert.equal(descendants(trigger).some(element => element.type === 'a'), false, 'download is not nested inside preview');
+  assert.equal(tree.props.onClick, undefined, 'actions cannot bubble to a container preview handler');
+  (trigger.props.onClick as () => void)();
+  tree = render();
+  const original = descendants(tree).find(element => element.type === 'dialog')!;
+  assert.equal(original.props['aria-label'], '预览 Long image name.png');
+  assert.equal(descendants(original).filter(element => element.type === 'img').length, 1);
+  node = { ...node, attachment: { type: 'blob', mimeType: 'image/svg+xml',
+    data: btoa('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>') } };
+  render(); h.flushEffects();
+  tree = render();
+  assert.equal(descendants(tree).some(element => element.type === 'dialog'), false);
+  (descendants(tree).find(element => element.props.className === 'cf-card-open')!.props.onClick as () => void)();
+  tree = render();
+  const next = descendants(tree).find(element => element.type === 'dialog')!;
+  assert.notEqual(next.props.key, original.props.key);
+  (original.props.onClose as () => void)();
+  assert.equal(descendants(render()).find(element => element.type === 'dialog')!.props.key, next.props.key);
+  h.unmount();
+  frontend.dispose?.();
+});
+
+test('preview target covers the tile without adding a grid row or an external focus outline', async () => {
+  const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.cf-card-open\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;/s);
+  assert.match(css, /\.cf-card \.cf-card-open:focus-visible\s*\{[^}]*outline:\s*2px solid[^}]*outline-offset:\s*-3px;/s);
+  assert.match(css, /\.cf-card-details\s*\{[^}]*pointer-events:\s*none;/s);
+  assert.match(css, /\.cf-card-actions\s*\{[^}]*pointer-events:\s*none;/s);
+  assert.match(css, /\.cf-icon-button\s*\{[^}]*z-index:\s*1;[^}]*pointer-events:\s*auto;/s);
+  assert.doesNotMatch(css, /cf-preview-button|cf-card-name:focus-visible|cf-card-status:focus-visible/);
+});
+
+test('a card opened before image metadata arrives becomes the preview rather than staying an empty details dialog', async () => {
+  const h = harness();
+  let respond!: (response: Response) => void;
+  h.context.request = () => new Promise<Response>(resolve => { respond = resolve; });
+  const frontend = await activate(h.context);
+  const node: RenderNode = { kind: 'image', origin: { sessionId: 'fixture', messageId: 'late-metadata' },
+    target: './image.svg', label: 'Loading image' };
+  const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+  let tree = render(); h.flushEffects();
+  (descendants(tree).find(element => element.props.className === 'cf-card-open')!.props.onClick as () => void)();
+  tree = render();
+  const initial = descendants(tree).find(element => element.type === 'dialog')!;
+  let opens = 0, closes = 0;
+  (initial.props.ref as { current: unknown }).current = { showModal: () => { opens++; }, close: () => { closes++; } };
+  h.flushEffects();
+  respond(new Response(null, { headers: { 'content-type': 'image/svg+xml', 'content-length': '200' } }));
+  await settle();
+  tree = render(); h.flushEffects();
+  const preview = descendants(tree).find(element => element.type === 'dialog')!;
+  assert.equal(preview.props['aria-label'], '预览 Loading image');
+  assert.equal(descendants(preview).filter(element => element.type === 'img').length, 1);
+  assert.equal(opens, 1);
+  assert.equal(closes, 0, 'metadata arrival must not close and refocus the modal');
+  h.unmount();
+  frontend.dispose?.();
 });

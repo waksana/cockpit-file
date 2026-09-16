@@ -149,8 +149,9 @@ export const activate: ActivateFrontend = context => {
     const [expanded, setExpanded] = React.useState<string>();
     const dialog = React.useRef<HTMLDialogElement>(null);
     const detailsKey = `details:${name}`;
-    const detailsOpen = expanded === detailsKey;
-    const open = detailsOpen || (preview !== undefined && expanded === preview.key);
+    const detailsOpen = expanded === detailsKey && !preview;
+    const open = expanded === detailsKey || (preview !== undefined && expanded === preview.key);
+    const label = preview ? `${preview.kind === 'image' ? '查看' : '播放'} ${name}` : `文件详情：${name}`;
     const suffix = /(?:\.tar\.(?:gz|bz2|xz|zst)|\.[a-z0-9]{1,10})$/i.exec(name);
     const extension = suffix && suffix.index > 0 ? suffix[0] : '';
     const stem = extension ? name.slice(0, -extension.length) : name;
@@ -160,7 +161,7 @@ export const activate: ActivateFrontend = context => {
       const element = dialog.current;
       element?.showModal();
       return () => element?.close();
-    }, [open, preview?.key]);
+    }, [open, expanded]);
     const icon = <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
       strokeWidth="1.5" aria-hidden="true">
       <path d="M14 3H6a1 1 0 0 0-1 1v16h14V8Zm0 0v5h5M8 12h8M8 16h6" />
@@ -174,40 +175,41 @@ export const activate: ActivateFrontend = context => {
         : <><audio key={preview.key} className="cf-audio-probe" src={preview.url} preload="metadata"
           onLoadedMetadata={preview.ready} onError={preview.failed} />{icon}</>);
     return <span className="cf-card" role="group" aria-label={name} aria-busy={busy}>
-      {preview ? <button type="button" className="cf-thumbnail cf-preview-button"
-        aria-label={`${preview.kind === 'image' ? '查看' : '播放'} ${name}`} aria-haspopup="dialog"
-        title={preview.kind === 'image' ? '查看图片' : '播放媒体'} onClick={() => setExpanded(preview.key)}>
-        {media}
-        {preview.kind !== 'image' && <span className="cf-play" aria-hidden="true">▶</span>}
-      </button> : <span className="cf-thumbnail" aria-hidden="true">{icon}</span>}
+      <button type="button" className="cf-card-open" aria-label={label} aria-haspopup="dialog"
+        aria-description={error || information} title={name} onClick={() => setExpanded(preview?.key ?? detailsKey)} />
+      <span className="cf-thumbnail" aria-hidden="true">
+        {media ?? icon}
+        {preview && preview.kind !== 'image' && <span className="cf-play" aria-hidden="true">▶</span>}
+      </span>
       <span className="cf-card-details">
-        <button type="button" className="cf-card-name" title={name} aria-label={`文件详情：${name}`} aria-haspopup="dialog"
-          onClick={() => setExpanded(detailsKey)}>
+        <span className="cf-card-name" title={name}>
           <span className="cf-name-stem" dir="auto">{stem}</span>{extension && <bdi className="cf-name-extension">{extension}</bdi>}
-        </button>
-        {error ? <button type="button" className="cf-card-status cf-error" title={error} aria-label={`查看文件错误：${error}`}
-          aria-haspopup="dialog" onClick={() => setExpanded(detailsKey)}><span role="alert">文件异常 · 查看原因</span></button>
+        </span>
+        {error ? <span className="cf-card-status cf-error" title={error} role="alert">文件异常 · 查看原因</span>
           : <span className="cf-card-status" title={information} role={busy ? 'status' : undefined}>{information}</span>}
         <span className="cf-progress-slot">
           {busy && <progress className="cf-progress" aria-label={`${name}：${status || '文件加载中'}`} />}
         </span>
       </span>
       <span className="cf-card-actions">{actions}</span>
-      {open && <dialog ref={dialog} className="cf-preview-dialog" aria-label={`${detailsOpen ? '文件详情' : '预览'} ${name}`}
-        onClose={() => setExpanded(undefined)}>
+      {open && <dialog key={expanded} ref={dialog} className="cf-preview-dialog" aria-label={`${detailsOpen ? '文件详情' : '预览'} ${name}`}
+        onClose={() => setExpanded(current => current === expanded ? undefined : current)}>
         <span className="cf-dialog-header">
           <span className="cf-dialog-name" dir="auto">{name}</span>
-          <button type="button" className="cf-button" autoFocus onClick={() => dialog.current?.close()}>关闭预览</button>
+          <button type="button" className="cf-button" autoFocus onClick={() => dialog.current?.close()}>
+            {detailsOpen ? '关闭详情' : '关闭预览'}
+          </button>
         </span>
-        {detailsOpen ? <div className="cf-file-information">
+        {(detailsOpen || error) && <div className="cf-file-information">
           {information && <p>{information}</p>}
           {error && <p className="cf-error">{error}</p>}
-        </div> : preview?.kind === 'image' ? <img className="cf-expanded-media" src={preview.url} alt={name}
+        </div>}
+        {!detailsOpen && (preview?.kind === 'image' ? <img className="cf-expanded-media" src={preview.url} alt={name}
           onLoad={preview.ready} onError={preview.failed} />
           : preview?.kind === 'video' ? <video className="cf-expanded-media" src={preview.url} aria-label={name} controls preload="metadata"
             onLoadedMetadata={preview.ready} onError={preview.failed} />
             : preview?.kind === 'audio' ? <audio className="cf-expanded-media" src={preview.url} aria-label={name} controls preload="metadata"
-              onLoadedMetadata={preview.ready} onError={preview.failed} /> : null}
+              onLoadedMetadata={preview.ready} onError={preview.failed} /> : null)}
       </dialog>}
     </span>;
   }
