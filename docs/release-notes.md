@@ -1,6 +1,11 @@
-# Cockpit File 0.1.3
+# Cockpit File 0.1.4
 
-Native artifact-path and SVG preview update for Cockpit Module API v1.
+Unreleased preview interaction update for Cockpit Module API v1.
+
+- The card body, filename and thumbnail share one accessible preview target; download, remove and retry stay independent.
+- Image/media titles open the actual preview, not a separate text-only dialog. Non-previewable files retain full details.
+- Keep the focus indicator inside the full tile after closing a dialog, without changing card/input geometry or removing keyboard focus.
+- A late close from an obsolete resource cannot dismiss a newer preview; image metadata arriving in an open details dialog upgrades it to preview.
 
 - Resolve `files/...` against only the project cwd and SDK-provided session workspace.
   Capture a unique source; reject ambiguity instead of guessing, searching disks or prompting the Agent.

@@ -1,6 +1,6 @@
 # Cockpit File 文档
 
-**当前源码：cockpit-file 0.1.3，配合固定 Cockpit 0.2.0 / Module API v1。**
+**当前源码：cockpit-file 0.1.4 开发版本，配合固定 Cockpit 0.2.0 / Module API v1。**
 本地构建、可信包安装、聊天上传和流式文件卡片已实现；发行包见 GitHub Releases。
 远程安装、全局文件库和旧历史补抓不在当前实现中。
 先看[构建与安装](installation.md)，再按主题了解当前契约。
@@ -114,7 +114,7 @@ SDK 1.0.13、bundled runtime 1.0.83 / protocol 3。
 | 新输出 | 已加载会话的新 ephemeral start/delta 建立扫描状态；无新流的旧完整事件不捕获 |
 | 引用 | 行内 Markdown link/image；相对路径、绝对路径、本地 file URL；未知 cwd 的相对引用失败 |
 | 限制 | 有界扫描/引用数/工作队列/上传大小；数值和配置入口见安装文档 |
-| 预览 | 按字节识别的安全图片/视频/音频；HTML/SVG 等只下载，不内嵌执行 |
+| 预览 | 按字节识别的图片/视频/音频；SVG 使用受限图片模式，HTML/PDF 不内嵌 |
 | 读取 | HEAD 有界探测，202/404 在总五秒内重试；其他明确错误提前失败，ready 后读原 URL |
 | 存储 | files/<id>/ready/body[.extension] 与 JSON；URL 保留 body 文件名，实现纯函数互逆 |
 | 平台 | Node 24.20.0，Linux；依赖 /proc/self/fd 固定读取句柄，没有不安全的其他平台 fallback |
