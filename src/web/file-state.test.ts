@@ -233,8 +233,9 @@ test('reordering touches only later owned successes and keeps other drafts, modu
     assert.ok(values.every(item => item.id !== foreign.id && item.id !== 'cf-upload:operation-1'));
     append(values);
   };
-  draft.snapshot = { ...draft.snapshot, text: 'keep this draft text', pending: true };
+  draft.snapshot = { ...draft.snapshot, text: 'keep this draft text' };
   store.receive([new File(['a'], 'a'), new File(['b'], 'b')], composer(draft));
+  draft.setPending(true);
   store.receive([new File(['other'], 'other')], composer(other));
   calls[2]!.response.resolve(uploaded('second'));
   await settle();
@@ -636,31 +637,54 @@ test('synchronous current pending checks protect removals even without a subscri
     else store.remove(draft, 'operation-1');
     assert.equal(calls.length, 1);
     assert.equal(draft.snapshot.pending, true, 'the module does not clear native pending or bypass sending');
-    assert.equal(draft.blocks, 0);
+    assert.equal(draft.blocks, complete ? 0 : 1);
+    assert.equal(draft.snapshot.attachments.length, complete ? 1 : 0);
+    assert.equal(calls[0]!.init!.signal!.aborted, false);
     store.dispose();
   }
 });
 
-test('uploads begun during native pending, and unfinished uploads crossing pending, remain protected', async () => {
-  for (const initiallyPending of [false, true]) {
-    const { store, calls } = uploadHarness();
-    const draft = new Draft('session');
-    draft.setPending(initiallyPending);
-    store.receive([new File(['a'], 'a'), new File(['b'], 'b')], composer(draft));
-    draft.setPending(true);
-    draft.setPending(false);
-    calls[0]!.response.resolve(uploaded('first'));
-    await settle();
-    store.removeAttachment(draft, 'cf-upload:operation-1');
-    store.remove(draft, 'operation-2');
-    assert.equal(calls.length, 2);
-    assert.equal(calls[1]!.init!.signal!.aborted, true);
-    calls[1]!.response.resolve(uploaded('late'));
-    await settle();
-    assert.equal(draft.snapshot.attachments.length, 0);
-    assert.equal(draft.blocks, 0);
-    store.dispose();
-  }
+test('new uploads and retries are rejected during native pending but work after its receipt', async () => {
+  const { store, calls, errors } = uploadHarness();
+  const draft = new Draft('session');
+  const context = composer(draft);
+  draft.setPending(true);
+  store.receive([new File(['a'], 'a')], context);
+  assert.equal(calls.length, 0, 'a stale picker/clipboard/drop context cannot start an upload');
+  assert.equal(draft.blocks, 0);
+  assert.match(store.snapshot(draft).error!, /正在提交/);
+  draft.setPending(false);
+  store.receive([new File(['a'], 'a')], context);
+  calls[0]!.response.resolve(Response.json({ error: 'fixture failure' }, { status: 503 }));
+  await settle();
+  draft.setPending(true);
+  store.retry(draft, 'operation-1');
+  assert.equal(calls.length, 1);
+  assert.equal(store.snapshot(draft).items[0]!.status, 'failed');
+  draft.setPending(false);
+  store.retry(draft, 'operation-1');
+  assert.equal(calls.length, 2);
+  assert.equal(errors.length, 2);
+  store.dispose();
+});
+
+test('unfinished uploads crossing a native submission still permanently lose deletion eligibility', async () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  store.receive([new File(['a'], 'a'), new File(['b'], 'b')], composer(draft));
+  draft.setPending(true);
+  draft.setPending(false);
+  calls[0]!.response.resolve(uploaded('first'));
+  await settle();
+  store.removeAttachment(draft, 'cf-upload:operation-1');
+  store.remove(draft, 'operation-2');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1]!.init!.signal!.aborted, true);
+  calls[1]!.response.resolve(uploaded('late'));
+  await settle();
+  assert.equal(draft.snapshot.attachments.length, 0);
+  assert.equal(draft.blocks, 0);
+  store.dispose();
 });
 
 test('restored, foreign, capture and replaced attachment identities never authorize a DELETE', async () => {

@@ -166,9 +166,16 @@ export class UploadStore {
     scope.unsubscribe = undefined;
   }
 
+  private editable(scope: UploadScope, draft: ModuleDraft): boolean {
+    if (!draft.getSnapshot().pending && !scope.draft!.getSnapshot().pending) return true;
+    this.reject(scope, '消息正在提交，请等待回执后再修改附件。');
+    return false;
+  }
+
   receive(files: readonly File[], context: ComposerContext): void {
     if (this.disposed || files.length === 0) return;
     const scope = this.bind(context.draft);
+    if (!this.editable(scope, context.draft)) return;
     if (context.disabled || context.operation !== 'prompt') {
       this.reject(scope, 'Files can only be attached to an available prompt.');
       return;
@@ -204,6 +211,7 @@ export class UploadStore {
   retry(draft: ModuleDraft, id: string): void {
     if (this.disposed) return;
     const scope = this.bind(draft);
+    if (!this.editable(scope, draft)) return;
     const entry = scope.entries.find(item => item.id === id && !item.attached);
     if (!entry || entry.status !== 'failed' || (!entry.file && !entry.result)) return;
     this.replace(scope, entry, { ...entry, status: entry.result ? 'ready' : 'uploading', error: undefined });
@@ -220,6 +228,7 @@ export class UploadStore {
   remove(draft: ModuleDraft, id: string): void {
     if (this.disposed) return;
     const scope = this.bind(draft);
+    if (!this.editable(scope, draft)) return;
     const entry = scope.entries.find(item => item.id === id && !item.attached);
     if (!entry) return;
     const owned = scope.owned.get(`cf-upload:${id}`);
@@ -235,6 +244,7 @@ export class UploadStore {
   removeAttachment(draft: ModuleDraft, id: string): void {
     if (this.disposed) return;
     const scope = this.bind(draft);
+    if (!this.editable(scope, draft)) return;
     const snapshot = draft.getSnapshot();
     const owned = scope.draft === draft && !snapshot.pending ? scope.owned.get(id) : undefined;
     try {

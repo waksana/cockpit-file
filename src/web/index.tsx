@@ -38,7 +38,8 @@ export const activate: ActivateFrontend = context => {
   function UploadAction(composer: ComposerContext) {
     const input = React.useRef<HTMLInputElement>(null);
     const selectionContext = React.useRef<ComposerContext | null>(null);
-    const disabled = composer.disabled || composer.operation !== 'prompt' || !nativePathPrefix || context.signal.aborted;
+    const draft = useDraft(composer.draft);
+    const disabled = composer.disabled || draft.pending || composer.operation !== 'prompt' || !nativePathPrefix || context.signal.aborted;
     return <span className="cf-upload-action">
       <button
         type="button"
@@ -72,6 +73,7 @@ export const activate: ActivateFrontend = context => {
   function AttachmentList(composer: ComposerContext) {
     const draft = useDraft(composer.draft);
     const pending = useUploads(composer.draft);
+    const disabled = composer.disabled || draft.pending;
     const ready = draft.attachments;
     if (!ready.length && !pending.items.length && !pending.error) return null;
     return <section className="cf-attachments" aria-label="文件附件">
@@ -79,7 +81,7 @@ export const activate: ActivateFrontend = context => {
       {(ready.length > 0 || pending.items.length > 0) && <ul className="cf-attachment-list">
         {ready.map(item => {
           const name = item.value.displayName || '附件';
-          const actions = <button type="button" className="cf-button"
+          const actions = <button type="button" className="cf-button" disabled={disabled}
             onClick={() => uploads.removeAttachment(composer.draft, item.id)} aria-label={`移除 ${name}`}>移除</button>;
           const url = item.value.type === 'file' ? nativeFileUrl(item.value.path, nativePathPrefix, context.apiBase) : null;
           return <li className="cf-attachment" key={item.id}>
@@ -92,9 +94,9 @@ export const activate: ActivateFrontend = context => {
         {pending.items.map(item => {
           const actions = <>
             {item.status === 'failed' && <button type="button" className="cf-button"
-              disabled={composer.disabled || composer.operation !== 'prompt'}
+              disabled={disabled || composer.operation !== 'prompt'}
               onClick={() => uploads.retry(composer.draft, item.id)} aria-label={`重新上传 ${item.name}`}>重试</button>}
-            <button type="button" className="cf-button" onClick={() => uploads.remove(composer.draft, item.id)}
+            <button type="button" className="cf-button" disabled={disabled} onClick={() => uploads.remove(composer.draft, item.id)}
               aria-label={`移除 ${item.name}`}>移除</button>
           </>;
           const props = {
