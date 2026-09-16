@@ -25,8 +25,13 @@ class Draft implements ModuleDraft {
     return () => this.listeners.delete(listener);
   }
   appendAttachments(values: readonly DraftAttachment[]) {
+    const replaced = new Set(values.map(item => item.id));
+    assert.equal(replaced.size, values.length, 'incoming attachment IDs must be unique');
+    assert.ok(values.every(item => typeof item.id === 'string' && item.id.length > 0));
+    const attachments = [...this.snapshot.attachments.filter(item => !replaced.has(item.id)), ...values];
+    if (attachments.length > 20) throw new Error('At most 20 attachments');
     this.appended.push([...values]);
-    this.snapshot = { ...this.snapshot, attachments: [...this.snapshot.attachments, ...values] };
+    this.snapshot = { ...this.snapshot, attachments };
     this.emit();
   }
   removeAttachment(id: string) {
@@ -36,7 +41,6 @@ class Draft implements ModuleDraft {
   editText(text: string) { this.snapshot = { ...this.snapshot, text }; this.emit(); }
   block() {
     this.blocks++;
-    this.snapshot = { ...this.snapshot, pending: true };
     this.emit();
     let active = true;
     return () => {
@@ -44,7 +48,6 @@ class Draft implements ModuleDraft {
       active = false;
       this.blocks--;
       this.releases++;
-      this.snapshot = { ...this.snapshot, pending: this.blocks > 0 };
       this.emit();
     };
   }
@@ -102,9 +105,20 @@ test('ordered uploads hold the captured draft guard across unmount and session s
   const unmountB = store.subscribe(b, () => {});
   calls[1]!.response.resolve(uploaded('second'));
   await settle();
-  assert.equal(a.appended.length, 0);
-  assert.equal(store.snapshot(a).items[1]!.status, 'ready');
+  assert.deepEqual(a.snapshot.attachments.map(item => item.value.displayName), ['second']);
+  assert.deepEqual(store.snapshot(a).items.map(item => [item.id, item.status]), [['operation-1', 'uploading']]);
   assert.equal(a.blocks, 1);
+
+  const refreshed = new Draft(a.sessionId);
+  refreshed.snapshot = { ...refreshed.snapshot, attachments: JSON.parse(JSON.stringify(a.snapshot.attachments)) };
+  const next = uploadHarness();
+  next.store.subscribe(refreshed, () => {});
+  assert.deepEqual(refreshed.snapshot.attachments.map(item => item.value.displayName), ['second']);
+  assert.deepEqual(next.store.snapshot(refreshed), { items: [] });
+  assert.equal(refreshed.blocks, 0);
+  assert.equal(next.calls.length, 0);
+  next.store.dispose();
+
   calls[0]!.response.resolve(uploaded('first'));
   await settle();
   assert.deepEqual(a.snapshot.attachments.map(item => item.value.displayName), ['first', 'second']);
@@ -137,7 +151,7 @@ test('failed upload retains its File and operation ID for an explicit retry', as
   store.dispose();
 });
 
-test('removing a failed first file releases later ready files in batch order without DELETE', async () => {
+test('removing a failed first file unblocks its already attached successor without DELETE', async () => {
   const { store, calls } = uploadHarness();
   const draft = new Draft('session');
   store.receive([new File(['a'], 'a'), new File(['b'], 'b')], composer(draft));
@@ -145,8 +159,12 @@ test('removing a failed first file releases later ready files in batch order wit
   calls[0]!.response.reject(new Error('Connection lost'));
   await settle();
   assert.equal(draft.blocks, 1);
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['second']);
+  assert.deepEqual(store.snapshot(draft).items.map(item => item.status), ['failed']);
+  const writes = draft.appended.length;
   store.remove(draft, 'operation-1');
   assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['second']);
+  assert.equal(draft.appended.length, writes, 'removal must not re-append an already ready successor');
   assert.equal(draft.blocks, 0);
   assert.deepEqual(calls.map(call => call.init!.method), ['POST', 'POST']);
   store.dispose();
@@ -156,15 +174,101 @@ test('overlapping selections preserve selection order and share only their own d
   const { store, calls } = uploadHarness();
   const draft = new Draft('session');
   store.receive([new File(['a'], 'a')], composer(draft));
-  store.receive([new File(['b'], 'b')], composer(draft));
+  store.receive([new File(['b'], 'b'), new File(['c'], 'c')], composer(draft));
+  store.receive([new File(['d'], 'd')], composer(draft));
   assert.equal(draft.blocks, 1);
+  calls[3]!.response.resolve(uploaded('fourth'));
+  await settle();
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['fourth']);
   calls[1]!.response.resolve(uploaded('second'));
   await settle();
-  assert.equal(draft.snapshot.attachments.length, 0);
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['second', 'fourth']);
+  calls[2]!.response.resolve(uploaded('third'));
+  await settle();
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['second', 'third', 'fourth']);
   calls[0]!.response.resolve(uploaded('first'));
   await settle();
-  assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['first', 'second']);
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['first', 'second', 'third', 'fourth']);
+  assert.equal(store.snapshot(draft).items.length, 0);
   assert.equal(draft.releases, 1);
+  store.dispose();
+});
+
+test('removing an attached successor cannot resurrect it when earlier uploads or new selections complete', async () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  store.receive([new File(['a'], 'a'), new File(['b'], 'b')], composer(draft));
+  calls[1]!.response.resolve(uploaded('second'));
+  await settle();
+  draft.removeAttachment('cf-upload:operation-2');
+  assert.equal(draft.snapshot.attachments.length, 0);
+  assert.equal(draft.blocks, 1);
+  store.receive([new File(['c'], 'c')], composer(draft));
+  calls[2]!.response.resolve(uploaded('third'));
+  await settle();
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['third']);
+  calls[0]!.response.resolve(uploaded('first'));
+  await settle();
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['first', 'third']);
+  assert.equal(draft.blocks, 0);
+  assert.ok(draft.appended.slice(1).every(values => values.every(item => item.id !== 'cf-upload:operation-2')));
+  store.dispose();
+});
+
+test('reordering touches only later owned successes and keeps other drafts, modules and native send state intact', async () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  const other = new Draft('other-session');
+  const foreign: DraftAttachment = { id: 'other-module', value: { type: 'file', path: '/synthetic/foreign' } };
+  const releaseOtherModule = draft.block();
+  store.receive([new File(['prefix'], 'prefix')], composer(draft));
+  calls[0]!.response.resolve(uploaded('prefix'));
+  await settle();
+  draft.appendAttachments([foreign]);
+  const append = draft.appendAttachments.bind(draft);
+  draft.appendAttachments = values => {
+    assert.ok(values.every(item => item.id !== foreign.id && item.id !== 'cf-upload:operation-1'));
+    append(values);
+  };
+  draft.snapshot = { ...draft.snapshot, text: 'keep this draft text', pending: true };
+  store.receive([new File(['a'], 'a'), new File(['b'], 'b')], composer(draft));
+  store.receive([new File(['other'], 'other')], composer(other));
+  calls[2]!.response.resolve(uploaded('second'));
+  await settle();
+  assert.equal(other.blocks, 1);
+  assert.equal(other.snapshot.attachments.length, 0);
+  calls[1]!.response.resolve(uploaded('first'));
+  await settle();
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.id), [
+    'cf-upload:operation-1', foreign.id, 'cf-upload:operation-2', 'cf-upload:operation-3',
+  ]);
+  assert.equal(draft.snapshot.attachments[1], foreign);
+  assert.equal(draft.snapshot.text, 'keep this draft text');
+  assert.equal(draft.snapshot.pending, true);
+  assert.equal(draft.blocks, 1, 'the other module still owns its blocker');
+  assert.equal(other.blocks, 1);
+  calls[3]!.response.resolve(uploaded('other'));
+  await settle();
+  assert.deepEqual(other.snapshot.attachments.map(item => item.value.displayName), ['other']);
+  assert.equal(other.blocks, 0);
+  releaseOtherModule();
+  store.dispose();
+});
+
+test('active jobs keep their original draft handle when the same session is presented again', async () => {
+  const { store, calls } = uploadHarness();
+  const original = new Draft('session');
+  const replacement = new Draft('session');
+  store.receive([new File(['a'], 'a'), new File(['b'], 'b')], composer(original));
+  store.subscribe(replacement, () => {});
+  calls[1]!.response.resolve(uploaded('second'));
+  await settle();
+  calls[0]!.response.resolve(uploaded('first'));
+  await settle();
+  assert.deepEqual(original.snapshot.attachments.map(item => item.value.displayName), ['first', 'second']);
+  assert.equal(original.blocks, 0);
+  assert.deepEqual(replacement.snapshot.attachments, []);
+  assert.equal(replacement.blocks, 0);
   store.dispose();
 });
 
@@ -195,6 +299,39 @@ test('disabled, non-prompt and excessive batches do not start uploads', () => {
   store.dispose();
 });
 
+test('the 20-file limit counts each attached success once and reuses removed slots', async () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  const file = new File(['a'], 'a');
+  store.receive([file, file], composer(draft));
+  calls[1]!.response.resolve(uploaded('second'));
+  await settle();
+  store.receive(Array.from({ length: 18 }, () => file), composer(draft));
+  assert.equal(calls.length, 20, 'a ready successor must not count as both pending and attached');
+  store.receive([file], composer(draft));
+  assert.equal(calls.length, 20);
+  assert.match(store.snapshot(draft).error!, /20 attachments/);
+  for (let index = 2; index < 20; index++) calls[index]!.response.resolve(uploaded(`file-${index}`));
+  await settle();
+  assert.equal(draft.snapshot.attachments.length, 19);
+  assert.equal(store.snapshot(draft).items.length, 1);
+  store.receive([file], composer(draft));
+  assert.equal(calls.length, 20);
+  draft.removeAttachment('cf-upload:operation-2');
+  store.receive([file], composer(draft));
+  assert.equal(calls.length, 21);
+  calls[20]!.response.resolve(uploaded('replacement'));
+  calls[0]!.response.resolve(uploaded('first'));
+  await settle();
+  assert.equal(draft.snapshot.attachments.length, 20);
+  assert.equal(new Set(draft.snapshot.attachments.map(item => item.id)).size, 20);
+  assert.equal(draft.snapshot.attachments[0]!.value.displayName, 'first');
+  assert.equal(draft.snapshot.attachments.at(-1)!.value.displayName, 'replacement');
+  assert.equal(draft.blocks, 0);
+  assert.deepEqual(store.snapshot(draft), { items: [] });
+  store.dispose();
+});
+
 test('remove and teardown abort work, suppress late callbacks and release guards once', async () => {
   const { store, calls } = uploadHarness();
   const draft = new Draft('session');
@@ -219,32 +356,76 @@ test('remove and teardown abort work, suppress late callbacks and release guards
   store.dispose();
 });
 
-test('refresh metadata never persists bytes and restored unfinished files require reselection', () => {
-  const data = new Map<string, string>();
-  const storage = {
-    getItem: (key: string) => data.get(key) ?? null,
-    setItem: (key: string, value: string) => { data.set(key, value); },
-    removeItem: (key: string) => { data.delete(key); },
-  };
-  const { store } = uploadHarness({ storage });
+test('dispose preserves already attached successors and prevents late reordering or retry writes', async () => {
+  const { store, calls, errors } = uploadHarness();
   const draft = new Draft('session');
-  store.receive([new File(['secret bytes not to serialize'], 'report.txt')], composer(draft));
-  const metadata = [...data.values()][0]!;
-  assert.doesNotMatch(metadata, /secret bytes|path|base64|file":/);
-  assert.deepEqual(JSON.parse(metadata), [{ sessionId: 'session', id: 'operation-1', name: 'report.txt', size: 29 }]);
+  store.receive([new File(['a'], 'a'), new File(['b'], 'b'), new File(['c'], 'c')], composer(draft));
+  calls[1]!.response.resolve(uploaded('second'));
+  calls[2]!.response.reject(new Error('Failed before disposal'));
+  await settle();
+  const writes = draft.appended.length;
+  const reports = errors.length;
   store.dispose();
-  const next = uploadHarness({ storage });
+  calls[0]!.response.resolve(uploaded('first'));
+  store.retry(draft, 'operation-3');
+  store.remove(draft, 'operation-1');
+  store.receive([new File(['late'], 'late')], composer(draft));
+  await settle();
+  assert.equal(calls.length, 3);
+  assert.equal(draft.appended.length, writes);
+  assert.equal(errors.length, reports);
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['second']);
+  assert.equal(draft.blocks, 0);
+  assert.equal(draft.releases, 1);
+});
+
+test('disposal during a host append cannot publish or release the same blocker again', async () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  let notifications = 0;
+  store.subscribe(draft, () => notifications++);
+  store.receive([new File(['a'], 'a')], composer(draft));
+  const before = notifications;
+  const append = draft.appendAttachments.bind(draft);
+  draft.appendAttachments = values => { append(values); store.dispose(); };
+  calls[0]!.response.resolve(uploaded('saved'));
+  await settle();
+  assert.equal(draft.snapshot.attachments.length, 1);
+  assert.equal(draft.releases, 1);
+  assert.equal(draft.blocks, 0);
+  assert.equal(notifications, before);
+});
+
+test('refresh discards uploading and failed selections and restores only host draft attachments', async () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  draft.editText('host-owned text');
+  store.receive([
+    new File(['pending'], 'pending.txt'), new File(['failed'], 'failed.txt'), new File(['ready'], 'ready.txt'),
+  ], composer(draft));
+  calls[1]!.response.reject(new Error('Connection lost'));
+  calls[2]!.response.resolve(uploaded('ready'));
+  await settle();
+  assert.deepEqual(store.snapshot(draft).items.map(item => item.status), ['uploading', 'failed']);
+  assert.equal(draft.blocks, 1);
+  const saved = JSON.parse(JSON.stringify({ text: draft.snapshot.text, attachments: draft.snapshot.attachments }));
+  store.dispose();
+  const next = uploadHarness();
   const refreshed = new Draft('session');
+  refreshed.snapshot = { ...refreshed.snapshot, ...saved };
   const unmount = next.store.subscribe(refreshed, () => {});
-  assert.equal(refreshed.blocks, 1);
-  assert.equal(next.store.snapshot(refreshed).items[0]!.status, 'reselect');
-  next.store.retry(refreshed, 'operation-1');
-  assert.equal(next.calls.length, 0);
-  unmount();
-  assert.equal(refreshed.blocks, 1, 'view unmount must not unblock an unresolved draft');
-  next.store.remove(refreshed, 'operation-1');
   assert.equal(refreshed.blocks, 0);
-  assert.equal(data.size, 0);
+  assert.deepEqual(next.store.snapshot(refreshed), { items: [] });
+  assert.equal(refreshed.snapshot.text, 'host-owned text');
+  assert.deepEqual(refreshed.snapshot.attachments.map(item => item.value.displayName), ['ready']);
+  next.store.retry(refreshed, 'operation-1');
+  next.store.retry(refreshed, 'operation-2');
+  assert.equal(next.calls.length, 0);
+  calls[0]!.response.resolve(uploaded('late'));
+  await settle();
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['ready']);
+  unmount();
+  assert.equal(refreshed.blocks, 0);
   next.store.dispose();
 });
 
@@ -299,12 +480,83 @@ test('draft append failures retain the saved result and can retry without upload
   calls[0]!.response.resolve(uploaded('saved'));
   await settle();
   assert.equal(store.snapshot(draft).items[0]!.status, 'failed');
-  assert.match(store.snapshot(draft).items[0]!.error!, /Draft temporarily unavailable/);
+  assert.match(store.snapshot(draft).items[0]!.error!, /Could not add uploaded files to the draft: Draft temporarily unavailable/);
   assert.equal(draft.blocks, 1);
   draft.appendAttachments = append;
   store.retry(draft, 'operation-1');
   assert.equal(calls.length, 1);
   assert.equal(draft.snapshot.attachments.length, 1);
+  assert.equal(draft.blocks, 0);
+  store.dispose();
+});
+
+test('failed draft additions do not stall later acknowledgements and retry restores selection order', async () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  store.receive([new File(['a'], 'a'), new File(['b'], 'b')], composer(draft));
+  const append = draft.appendAttachments.bind(draft);
+  draft.appendAttachments = () => { throw new Error('Draft temporarily unavailable'); };
+  calls[1]!.response.resolve(uploaded('second'));
+  await settle();
+  assert.equal(draft.snapshot.attachments.length, 0);
+  assert.deepEqual(store.snapshot(draft).items.map(item => item.status), ['uploading', 'failed']);
+  draft.appendAttachments = append;
+  store.receive([new File(['c'], 'c')], composer(draft));
+  calls[2]!.response.resolve(uploaded('third'));
+  await settle();
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['third']);
+  assert.equal(store.snapshot(draft).items[1]!.status, 'failed', 'draft-add failures require an explicit retry');
+  calls[0]!.response.resolve(uploaded('first'));
+  await settle();
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['first', 'third']);
+  assert.deepEqual(store.snapshot(draft).items.map(item => item.id), ['operation-2']);
+  assert.equal(draft.blocks, 1);
+  store.retry(draft, 'operation-2');
+  assert.equal(calls.length, 3, 'retry must reuse the saved native attachment, not upload bytes again');
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['first', 'second', 'third']);
+  assert.deepEqual(draft.appended.at(-1)!.map(item => item.value.displayName), ['second', 'third']);
+  assert.equal(draft.blocks, 0);
+  store.dispose();
+});
+
+test('a failed reorder leaves existing successors ready and does not resurrect them if removed before retry', async () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  store.receive([new File(['a'], 'a'), new File(['b'], 'b')], composer(draft));
+  calls[1]!.response.resolve(uploaded('second'));
+  await settle();
+  const append = draft.appendAttachments.bind(draft);
+  draft.appendAttachments = () => { throw new Error('Cannot update draft'); };
+  calls[0]!.response.resolve(uploaded('first'));
+  await settle();
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['second']);
+  assert.deepEqual(store.snapshot(draft).items.map(item => [item.id, item.status]), [['operation-1', 'failed']]);
+  draft.removeAttachment('cf-upload:operation-2');
+  draft.appendAttachments = append;
+  store.retry(draft, 'operation-1');
+  assert.equal(calls.length, 2);
+  assert.deepEqual(draft.snapshot.attachments.map(item => item.value.displayName), ['first']);
+  assert.equal(draft.blocks, 0);
+  store.dispose();
+});
+
+test('host capacity changes retain uploaded results until a draft slot is available', async () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  store.receive([new File(['a'], 'a')], composer(draft));
+  draft.appendAttachments(Array.from({ length: 20 }, (_, index) => ({
+    id: `other-module-${index}`, value: { type: 'file', path: `/synthetic/${index}` },
+  })));
+  calls[0]!.response.resolve(uploaded('saved'));
+  await settle();
+  assert.equal(store.snapshot(draft).items[0]!.status, 'failed');
+  assert.match(store.snapshot(draft).items[0]!.error!, /Could not add uploaded files/);
+  assert.equal(draft.blocks, 1);
+  draft.removeAttachment('other-module-0');
+  store.retry(draft, 'operation-1');
+  assert.equal(calls.length, 1);
+  assert.equal(draft.snapshot.attachments.length, 20);
+  assert.equal(draft.snapshot.attachments.at(-1)!.value.displayName, 'saved');
   assert.equal(draft.blocks, 0);
   store.dispose();
 });

@@ -3,6 +3,8 @@
 Initial local file module for Cockpit Module API v1.
 
 - Chat uploads, paste/drop attachments, native attachment submission, previews and downloads.
+- Successful uploads persist immediately in the host draft; refresh discards unfinished selections.
+- Native blob cards use available inline bytes or show an explicit unavailable state without historical recovery.
 - Best-effort incremental capture of new Markdown file references with immutable per-message originals.
 - Five-second card loading budget; no historical backfill or content deduplication.
 - Local trusted `.tgz` installation only. No global file-library management or remote installer.

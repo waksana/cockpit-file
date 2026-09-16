@@ -6,9 +6,9 @@
 
 本模块对应的宿主实现为
 [waksana/cockpit#4](https://github.com/waksana/cockpit/pull/4)，
-初始可复现提交是
-[`dc251928c2bd9ebf9745cd4a6971e9c27bf7c3c6`](https://github.com/waksana/cockpit/tree/dc251928c2bd9ebf9745cd4a6971e9c27bf7c3c6)。
-该 PR 未合并前，需明确选择这个提交或经过复核的后续提交，不能直接使用缺少接口的 main。
+当前固定提交记录在 [`tooling/host-sdk.json`](../tooling/host-sdk.json)，
+包含原生 blob 展示描述与模块异常处理的修正。
+该 PR 未合并前，需明确选择固定提交，不能直接使用缺少接口的 main。
 
 ## 1. 条件
 

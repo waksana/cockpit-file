@@ -3,21 +3,17 @@ import type {
 } from '@cockpit/module-api';
 import { isLocalFileReference, messageFileUrl, nativeFileUrl } from '../shared/files.ts';
 import { DEFAULT_MAX_BYTES, FileProbes, formatBytes, previewKind, UploadStore } from './file-state.ts';
+import { decodeNativeBlob, unavailableBlobReason, type NativeBlob } from './blob.ts';
 
 export const activate: ActivateFrontend = context => {
   const React = context.react;
   const nativePathPrefix = typeof context.config.nativePathPrefix === 'string' ? context.config.nativePathPrefix : '';
   const maxBytes = typeof context.config.maxBytes === 'number' && Number.isSafeInteger(context.config.maxBytes) && context.config.maxBytes > 0
     ? context.config.maxBytes : DEFAULT_MAX_BYTES;
-  let storage: Storage | undefined;
-  try {
-    storage = typeof sessionStorage === 'undefined' ? undefined : sessionStorage;
-  } catch (error) {
-    context.report(error);
-  }
   const uploads = new UploadStore({
-    request: context.request, report: context.report, apiBase: context.apiBase, nativePathPrefix, maxBytes, storage,
+    request: context.request, report: context.report, apiBase: context.apiBase, nativePathPrefix, maxBytes,
   });
+  const blobReleases = new Set<() => void>();
   const probes = new FileProbes(context.request, context.apiBase);
   const page = typeof document === 'undefined' ? undefined : document;
   const visibilityChanged = () => probes.setVisible(page?.visibilityState !== 'hidden');
@@ -100,7 +96,7 @@ export const activate: ActivateFrontend = context => {
             <span className="cf-filename">{item.name}</span>
             <span className={`cf-status${item.error ? ' cf-error' : ''}`} role={item.error ? 'alert' : 'status'}>
               {item.status === 'uploading' ? `上传中 · ${formatBytes(item.size)}`
-                : item.status === 'ready' ? '已上传，等待前面的文件'
+                : item.status === 'ready' ? '已上传，等待加入草稿'
                   : item.error}
             </span>
           </span>
@@ -168,7 +164,92 @@ export const activate: ActivateFrontend = context => {
     </span>;
   }
 
+  type BlobState = {
+    data: string | undefined;
+    mimeType: string;
+    deadline: number;
+    preview: 'pending' | 'ready' | 'failed';
+  } & ({ url: string; size: number; mime: string; error?: string } | { url?: undefined; error: string });
+
+  function BlobCard({ attachment, name }: { attachment: NativeBlob; name: string }) {
+    const [state, setState] = React.useState<BlobState>();
+    const [round, setRound] = React.useState(0);
+    const { data, mimeType, omittedReason } = attachment;
+    React.useEffect(() => {
+      if (disposed || context.signal.aborted || unavailableBlobReason({ type: 'blob', data, mimeType, omittedReason })) {
+        setState(undefined);
+        return;
+      }
+      let url: string | undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const release = () => {
+        if (url) URL.revokeObjectURL(url);
+        url = undefined;
+        clearTimeout(timer);
+        blobReleases.delete(release);
+      };
+      try {
+        const blob = decodeNativeBlob({ type: 'blob', data, mimeType }, maxBytes);
+        url = URL.createObjectURL(blob);
+        const preview = previewKind(blob.type) ? 'pending' : 'ready';
+        setState({ data, mimeType, url, size: blob.size, mime: blob.type, preview, deadline: Date.now() + 5_000 });
+        if (preview === 'pending') timer = setTimeout(() => {
+          if (!disposed) setState(previous => previous && previous.url === url && previous.preview === 'pending'
+            ? { ...previous, preview: 'failed', error: '预览加载超时，仍可下载原件' } : previous);
+        }, 5_000);
+        blobReleases.add(release);
+      } catch (error) {
+        release();
+        context.report(error);
+        setState({ data, mimeType, preview: 'failed', deadline: 0,
+          error: error instanceof Error ? error.message : '原生附件无法读取' });
+      }
+      return release;
+    }, [data, mimeType, omittedReason, round]);
+    const current = state?.data === data && state?.mimeType === mimeType ? state : undefined;
+    const error = unavailableBlobReason(attachment) ?? current?.error;
+    const resource = !unavailableBlobReason(attachment) && current?.url ? current : undefined;
+    const kind = resource?.mime ? previewKind(resource.mime) : null;
+    const loading = !error && (!current || current.preview === 'pending');
+    const mediaResult = (ready: boolean) => {
+      if (disposed || !resource) return;
+      setState(previous => {
+        if (previous?.url !== resource.url || (ready && previous.preview !== 'pending')) return previous;
+        const available = ready && Date.now() < previous.deadline;
+        return { ...previous, preview: available ? 'ready' : 'failed',
+          ...(available ? {} : { error: '无法预览，仍可下载原件' }) };
+      });
+    };
+    return <span className="cf-card" role="group" aria-label={name} aria-busy={loading}>
+      <span className="cf-card-name">{name}</span>
+      {loading && !resource && <span className="cf-status">文件加载中…</span>}
+      {kind && resource && <span className={`cf-preview${kind === 'audio' ? ' cf-preview-audio' : ''}`}>
+        {loading && <span className="cf-placeholder" role="status">文件加载中…</span>}
+        {resource.preview !== 'failed' && kind === 'image' &&
+          <img key={resource.url} className="cf-media" data-loading={loading} src={resource.url} alt={name}
+            onLoad={() => mediaResult(true)} onError={() => mediaResult(false)} />}
+        {resource.preview !== 'failed' && kind === 'video' &&
+          <video key={resource.url} className="cf-media" data-loading={loading} src={resource.url} controls preload="metadata"
+            onLoadedMetadata={() => mediaResult(true)} onError={() => mediaResult(false)} />}
+        {resource.preview !== 'failed' && kind === 'audio' &&
+          <audio key={resource.url} className="cf-media" data-loading={loading} src={resource.url} controls preload="metadata"
+            onLoadedMetadata={() => mediaResult(true)} onError={() => mediaResult(false)} />}
+        {resource.preview === 'failed' && <span className="cf-placeholder">无法预览</span>}
+      </span>}
+      {error && <span className="cf-error" role="status">{!resource && '附件不可用：'}{error}</span>}
+      {resource && <span className="cf-card-footer">
+        <span className="cf-status">{formatBytes(resource.size)}</span>
+        <a className="cf-download" href={resource.url} download={name}>下载</a>
+        {resource.preview === 'failed' &&
+          <button type="button" className="cf-button" onClick={() => setRound(value => value + 1)}>重试</button>}
+      </span>}
+    </span>;
+  }
+
   function FileRenderer({ node }: { node: RenderNode }) {
+    if (node.kind === 'attachment' && node.attachment?.type === 'blob') {
+      return <BlobCard attachment={node.attachment} name={node.label || node.attachment.displayName || '附件'} />;
+    }
     const url = nodeUrl(node);
     if (!url) return <span>{node.label}</span>;
     return <FileCard key={url} url={url} name={node.label || node.attachment?.displayName || '文件'} />;
@@ -182,6 +263,7 @@ export const activate: ActivateFrontend = context => {
     page?.removeEventListener('visibilitychange', visibilityChanged);
     uploads.dispose();
     probes.dispose();
+    for (const release of [...blobReleases]) release();
   }
   context.signal.addEventListener('abort', dispose, { once: true });
   if (context.signal.aborted) dispose();
@@ -196,7 +278,7 @@ export const activate: ActivateFrontend = context => {
     }],
     chatRenderers: [{
       id: 'files',
-      matches: node => !disposed && nodeUrl(node) !== null,
+      matches: node => !disposed && ((node.kind === 'attachment' && node.attachment?.type === 'blob') || nodeUrl(node) !== null),
       component: FileRenderer,
     }],
     dispose,
