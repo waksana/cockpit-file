@@ -1,6 +1,7 @@
 # Cockpit File 0.1.6
 
-Unreleased compact file display update for Cockpit v0.2.0 / Module API v1 / Module UI v1.
+Compact file display update for Cockpit v0.2.0 / Module API v1 / Module UI v1.
+Assets become available after the immutable-tag Release workflow succeeds.
 
 ## Changes since 0.1.5
 

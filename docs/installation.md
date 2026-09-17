@@ -1,6 +1,6 @@
 # 下载、构建与安装
 
-**cockpit-file 0.1.6 开发版本（尚未发布）** 配合 **Cockpit v0.2.0** 运行包或下述固定源码；
+**cockpit-file 0.1.6** 配合 **Cockpit v0.2.0** 运行包或下述固定源码；
 不能对已发布的 Cockpit v0.1.0 直接执行模块命令。
 
 **0.1.5 的配套 UI 要求：** 前端要求 `context.uiVersion === 1`
@@ -21,10 +21,10 @@
 不能直接配合缺少 rendersDraftAttachments 声明支持的旧宿主；
 已发布版本使用对应 tag 的文档和构建基线。
 
-普通安装在 [v0.1.5 Release](https://github.com/waksana/cockpit-file/releases/tag/v0.1.5)
-发布完成后下载 `cockpit-file-0.1.5.tgz` 和 `cockpit-file-0.1.5.tgz.sha256`，
-执行 `sha256sum -c cockpit-file-0.1.5.tgz.sha256` 后按下方安装步骤启用。
-若资产尚未生成，请等待该版本 workflow；不要将旧版 0.1.4 包当作本次共享 UI 更新。
+普通安装在 [v0.1.6 Release](https://github.com/waksana/cockpit-file/releases/tag/v0.1.6)
+发布完成后下载 `cockpit-file-0.1.6.tgz` 和 `cockpit-file-0.1.6.tgz.sha256`，
+执行 `sha256sum -c cockpit-file-0.1.6.tgz.sha256` 后按下方安装步骤启用。
+若资产尚未生成，请等待该版本 workflow；不要将旧版包当作本次紧凑展示更新。
 Source code ZIP/tar 不是模块安装包。只有源码开发需要执行 SDK 准备和构建步骤。
 
 安装前了解[复制标签页与删除的已知限制](release-notes.md#known-limitation)：

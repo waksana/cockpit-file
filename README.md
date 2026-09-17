@@ -19,7 +19,7 @@ Agent 可以照常使用 Markdown 引用文件，不需要学习额外的发送�
 
 ## 当前状态
 
-**当前开发版本为 0.1.6（尚未发布）**；已发布资产以 GitHub Releases 为准。
+**当前版本为 0.1.6**；可下载资产以该版本 Release workflow 成功发布为准。
 需要 Cockpit v0.2.0 的 Module API v1 / Module UI v1；Cockpit v0.1.0 不支持此模块。
 需要已合入的 [waksana/cockpit#7](https://github.com/waksana/cockpit/pull/7) 输入区配套调整；
 准确的构建基线见[安装指南](docs/installation.md)。

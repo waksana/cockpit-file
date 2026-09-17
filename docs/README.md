@@ -1,6 +1,6 @@
 # Cockpit File 文档
 
-**当前开发源码：cockpit-file 0.1.6（尚未发布），配合 Cockpit v0.2.0 / Module API v1 / Module UI v1。**
+**本次发行源码：cockpit-file 0.1.6，配合 Cockpit v0.2.0 / Module API v1 / Module UI v1。**
 本地构建、可信包安装、聊天上传和流式文件卡片已实现；发行包见 GitHub Releases。
 远程安装、全局文件库和旧历史补抓不在当前实现中。
 先看[构建与安装](installation.md)，再按主题了解当前契约。

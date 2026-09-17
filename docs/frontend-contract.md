@@ -1,7 +1,7 @@
 # 前端接入契约
 
 **当前源码：Module API v1。** 实际公共类型由 Cockpit 的 `packages/module-api` 提供，
-模块入口是 `activate(context)`；当前开发中的紧凑展示尚未发布。
+模块入口是 `activate(context)`；本次紧凑展示随 0.1.6 交付，资产以 Release workflow 成功发布为准。
 前端显式校验公共 UI v1 与 `context.createPortal`；
 公共 CSS/图标/兼容规范只在宿主
 [模块 UI 开发指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md) 维护。
