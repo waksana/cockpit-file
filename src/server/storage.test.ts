@@ -181,27 +181,41 @@ test('source directories are rejected without copying or serving arbitrary paths
   assert.deepEqual(await storage.lookupUpload('unknown'), { state: 'no-record' });
 });
 
-test('capture detects source modification during streaming and publishes no partial original', async t => {
-  const { parent, root, storage } = await fixture(t);
+test('capture detects source modification during streaming and publishes no partial original', { timeout: 5000 }, async t => {
+  const reading = gate();
+  const release = gate();
+  t.after(release.resolve);
+  const { parent, storage } = await fixture(t);
   const source = join(parent, 'changing.bin');
   await writeFile(source, Buffer.alloc(8 * 1024 * 1024, 1));
+  const originalOpen = filesystem.open;
+  t.mock.method(filesystem, 'open', async (...args: Parameters<typeof originalOpen>) => {
+    const handle = await originalOpen(...args);
+    if (args[0] === source) {
+      const originalRead = handle.read;
+      let intercepted = false;
+      t.mock.method(handle, 'read', async (...readArgs: Parameters<typeof originalRead>) => {
+        const result = await originalRead.apply(handle, readArgs);
+        if (result.bytesRead > 0 && !intercepted) {
+          intercepted = true;
+          reading.resolve();
+          await release.promise;
+        }
+        return result;
+      });
+    }
+    return handle;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
   const promise = storage.capture('change', './changing.bin', source);
   const checked = assert.rejects(promise, code('SOURCE_CHANGED'));
-  let payload: string | undefined;
-  for (let attempt = 0; attempt < 1000; attempt++) {
-    const lookup = await storage.lookupCapture('change', './changing.bin');
-    if (lookup.state === 'pending') {
-      const path = join(root, 'files', lookup.fileId, 'attempt', 'payload', 'body');
-      try {
-        if ((await stat(path)).size > 0) { payload = path; break; }
-      } catch (error) {
-        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
-      }
-    }
-    await new Promise<void>(resolve => setImmediate(resolve));
+  try {
+    await reading.promise;
+    await writeFile(source, Buffer.alloc(8 * 1024 * 1024, 2));
+  } finally {
+    release.resolve();
   }
-  assert.ok(payload, 'copy entered its streaming phase');
-  await writeFile(source, Buffer.alloc(8 * 1024 * 1024, 2));
   await checked;
   assert.equal((await storage.lookupCapture('change', './changing.bin')).state, 'failed');
 });
