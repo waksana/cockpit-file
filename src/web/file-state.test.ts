@@ -850,7 +850,11 @@ test('HEAD probes coalesce by URL and stop after a single five-second budget', a
   const calls: { time: number; path: string; init?: RequestInit }[] = [];
   const probes = new FileProbes(async (path, init) => {
     calls.push({ time: clock.time, path, init });
-    return new Response(null, { status: calls.length % 2 ? 202 : 404 });
+    const pending = calls.length % 2 === 1;
+    return new Response(null, {
+      status: pending ? 202 : 404,
+      headers: { 'X-File-State': pending ? 'pending' : 'missing' },
+    });
   }, apiBase, clock);
   const offA = probes.subscribe(fileUrl, () => {});
   const offB = probes.subscribe(fileUrl, () => {});
@@ -859,9 +863,16 @@ test('HEAD probes coalesce by URL and stop after a single five-second budget', a
   assert.equal(calls[0]!.path, `/files/${fileId('abc')}/body.png`);
   assert.equal(calls[0]!.init!.method, 'HEAD');
   assert.equal(calls[0]!.init!.cache, 'no-store');
-  await clock.advance(5_000);
+  await clock.advance(4_999);
+  assert.equal(probes.snapshot(fileUrl).status, 'pending');
+  assert.equal(probes.snapshot(fileUrl).failure, undefined);
+  assert.equal(probes.snapshot(fileUrl).error, undefined);
+  await clock.advance(1);
   assert.equal(probes.snapshot(fileUrl).status, 'unavailable');
   assert.equal(probes.snapshot(fileUrl).deadline, 5_000);
+  assert.deepEqual(probes.snapshot(fileUrl).failure, { kind: 'timeout' });
+  assert.equal(probes.snapshot(fileUrl).error,
+    'File status check did not finish within five seconds. File availability is still unknown; retry to check again.');
   assert.ok(calls.length <= 9);
   assert.equal(clock.tasks.size, 0);
   const count = calls.length;
@@ -870,9 +881,13 @@ test('HEAD probes coalesce by URL and stop after a single five-second budget', a
   await clock.advance(5_000);
   assert.equal(calls.length, count, 'remount cannot start a new round');
   probes.retry(fileUrl);
+  assert.equal(probes.snapshot(fileUrl).failure, undefined);
+  assert.equal(probes.snapshot(fileUrl).error, undefined);
   await settle();
   assert.equal(calls.length, count + 1);
   assert.equal(probes.snapshot(fileUrl).deadline, 15_000);
+  assert.ok(calls.every(call => call.init?.method === 'HEAD' && call.init.body === undefined),
+    'status checks never fetch file bytes or trigger capture');
   offC();
   probes.dispose();
 });
@@ -892,9 +907,12 @@ test('hidden and unmounted probes abort and resume against their original deadli
   await clock.advance(5_000);
   probes.setVisible(true);
   assert.equal(probes.snapshot(fileUrl).status, 'unavailable');
+  assert.deepEqual(probes.snapshot(fileUrl).failure, { kind: 'timeout' });
   assert.equal(calls.length, 1);
   off();
   probes.retry(fileUrl);
+  assert.equal(probes.snapshot(fileUrl).failure, undefined);
+  assert.equal(probes.snapshot(fileUrl).error, undefined);
   assert.equal(calls.length, 1, 'manual retry without a consumer cannot start polling');
   const remount = probes.subscribe(fileUrl, () => {});
   assert.equal(calls.length, 2);
@@ -904,111 +922,257 @@ test('hidden and unmounted probes abort and resume against their original deadli
   probes.dispose();
 });
 
-test('requests that never resolve are aborted at the total deadline', async () => {
+test('hung requests abort at the total deadline and late success cannot change the timeout', async () => {
   const clock = new Clock();
+  const response = deferred<Response>();
   let signal: AbortSignal | undefined;
   const probes = new FileProbes((_path, init) => {
     signal = init!.signal as AbortSignal;
-    return new Promise(() => {});
+    return response.promise;
   }, apiBase, clock);
   probes.subscribe(fileUrl, () => {});
   await clock.advance(5_000);
   assert.equal(signal!.aborted, true);
   assert.equal(probes.snapshot(fileUrl).status, 'unavailable');
+  assert.deepEqual(probes.snapshot(fileUrl).failure, { kind: 'timeout' });
+  assert.equal(clock.tasks.size, 0);
+  const snapshot = probes.snapshot(fileUrl);
+  response.resolve(new Response(null, { headers: { 'content-type': 'image/png' } }));
+  await settle();
+  assert.equal(probes.snapshot(fileUrl), snapshot);
   probes.dispose();
 });
 
-test('authorization, known failure and server errors fail fast', async () => {
+test('HTTP errors fail fast with their status, without inferring file absence, and reset on retry', async () => {
   for (const status of [401, 403, 410, 422, 500, 503]) {
     const clock = new Clock();
     let requests = 0;
-    const probes = new FileProbes(async () => { requests++; return new Response(null, { status }); }, apiBase, clock);
+    const probes = new FileProbes(async () => {
+      requests++;
+      return new Response(null, { status: requests === 1 ? status : 200 });
+    }, apiBase, clock);
     probes.subscribe(fileUrl, () => {});
     await settle();
     assert.equal(probes.snapshot(fileUrl).status, 'unavailable', String(status));
+    assert.deepEqual(probes.snapshot(fileUrl).failure, { kind: 'http', status });
+    assert.equal(probes.snapshot(fileUrl).error, status === 401 || status === 403
+      ? 'You do not have access to this file.'
+      : `File status check failed (HTTP ${status}).`);
+    assert.equal(clock.tasks.size, 0);
+    await clock.advance(5_000);
+    assert.equal(requests, 1);
+    assert.deepEqual(probes.snapshot(fileUrl).failure, { kind: 'http', status }, 'HTTP failures do not become timeouts');
+    probes.retry(fileUrl);
+    assert.equal(probes.snapshot(fileUrl).status, 'pending');
+    assert.equal(probes.snapshot(fileUrl).failure, undefined);
+    assert.equal(probes.snapshot(fileUrl).error, undefined);
+    await settle();
+    assert.equal(requests, 2);
+    assert.equal(probes.snapshot(fileUrl).status, 'ready');
+    assert.equal(probes.snapshot(fileUrl).failure, undefined);
+    assert.equal(probes.snapshot(fileUrl).error, undefined);
+    assert.equal(clock.tasks.size, 0);
+    probes.dispose();
+  }
+});
+
+test('X-File-State failed makes otherwise retryable HTTP statuses fail immediately', async () => {
+  for (const status of [202, 404]) {
+    const clock = new Clock();
+    let requests = 0;
+    const probes = new FileProbes(async () => {
+      requests++;
+      return new Response(null, { status, headers: { 'X-File-State': 'failed' } });
+    }, apiBase, clock);
+    probes.subscribe(fileUrl, () => {});
+    await settle();
+    assert.equal(probes.snapshot(fileUrl).status, 'unavailable');
+    assert.deepEqual(probes.snapshot(fileUrl).failure, { kind: 'http', status });
+    assert.equal(probes.snapshot(fileUrl).error, `File status check failed (HTTP ${status}).`);
     assert.equal(clock.tasks.size, 0);
     await clock.advance(5_000);
     assert.equal(requests, 1);
     probes.dispose();
   }
-  const probes = new FileProbes(async () => new Response(null, {
-    status: 404, headers: { 'x-cockpit-file-state': 'failed' },
-  }), apiBase, new Clock());
-  probes.subscribe(fileUrl, () => {});
+});
+
+test('network errors preserve full details and require explicit retry to clear their failure', async () => {
+  const clock = new Clock();
+  const detail = `Connection lost: ${'diagnostic detail '.repeat(40)}`;
+  let requests = 0;
+  const probes = new FileProbes(async () => {
+    if (++requests === 1) throw new Error(detail);
+    return new Response(null);
+  }, apiBase, clock);
+  const off = probes.subscribe(fileUrl, () => {});
   await settle();
   assert.equal(probes.snapshot(fileUrl).status, 'unavailable');
-  probes.dispose();
-});
-
-test('ready media shares the original deadline and falls back to download instead of infinite loading', async () => {
-  const clock = new Clock();
-  const probes = new FileProbes(async () => new Response(null, {
-    headers: { 'content-type': 'image/png; charset=binary', 'content-length': '2048' },
-  }), apiBase, clock);
-  probes.subscribe(fileUrl, () => {});
-  await settle();
-  assert.deepEqual(probes.snapshot(fileUrl), {
-    status: 'ready', round: 0, deadline: 5_000, mime: 'image/png', size: 2048, preview: 'pending',
-  });
-  await clock.advance(5_000);
-  assert.equal(probes.snapshot(fileUrl).status, 'ready');
-  assert.equal(probes.snapshot(fileUrl).preview, 'failed');
-  assert.match(probes.snapshot(fileUrl).error!, /five seconds/);
-  probes.retry(fileUrl);
-  await settle();
-  probes.mediaReady(fileUrl, 0);
-  assert.equal(probes.snapshot(fileUrl).preview, 'pending', 'stale media callback ignored');
-  probes.mediaReady(fileUrl, 1);
-  assert.equal(probes.snapshot(fileUrl).preview, 'ready');
+  assert.deepEqual(probes.snapshot(fileUrl).failure, { kind: 'network' });
+  assert.equal(probes.snapshot(fileUrl).error, `File status check failed: ${detail}`);
   assert.equal(clock.tasks.size, 0);
-  await clock.advance(6_000);
-  assert.equal(probes.snapshot(fileUrl).preview, 'ready');
-  probes.dispose();
-});
-
-test('ordinary files finish after HEAD without fetching bytes, and media errors expose retry', async () => {
-  const clock = new Clock();
-  let calls = 0;
-  const probes = new FileProbes(async () => {
-    calls++;
-    return new Response(null, { headers: { 'content-type': calls === 1 ? 'application/pdf' : 'video/mp4' } });
-  }, apiBase, clock);
+  off();
   probes.subscribe(fileUrl, () => {});
-  await settle();
-  assert.equal(probes.snapshot(fileUrl).status, 'ready');
-  assert.equal(probes.snapshot(fileUrl).preview, undefined);
-  assert.equal(clock.tasks.size, 0);
   await clock.advance(10_000);
-  assert.equal(calls, 1);
+  assert.equal(requests, 1);
+  assert.deepEqual(probes.snapshot(fileUrl).failure, { kind: 'network' });
   probes.retry(fileUrl);
+  assert.equal(probes.snapshot(fileUrl).status, 'pending');
+  assert.equal(probes.snapshot(fileUrl).failure, undefined);
+  assert.equal(probes.snapshot(fileUrl).error, undefined);
   await settle();
-  probes.mediaFailed(fileUrl, 1);
-  assert.equal(probes.snapshot(fileUrl).preview, 'failed');
+  assert.equal(requests, 2);
+  assert.deepEqual(probes.snapshot(fileUrl), {
+    status: 'ready', round: 1, deadline: 15_000, mime: 'application/octet-stream',
+  });
   assert.equal(clock.tasks.size, 0);
+  probes.dispose();
+});
+
+test('HEAD 200 finishes media and ordinary metadata checks without reading bodies or waiting for preview events', async () => {
+  for (const mime of ['image/png', 'video/mp4', 'audio/mpeg', 'application/pdf']) {
+    const clock = new Clock();
+    const response = deferred<Response>();
+    const calls: RequestInit[] = [];
+    const probes = new FileProbes((_path, init) => {
+      calls.push(init!);
+      return response.promise;
+    }, apiBase, clock);
+    probes.subscribe(fileUrl, () => {});
+    probes.subscribe(fileUrl, () => {});
+    assert.equal(calls.length, 1);
+    assert.equal(clock.tasks.size, 1);
+    await clock.advance(4_999);
+    const metadata = new Response('The probe must not read these bytes.', {
+      headers: { 'content-type': `${mime}; charset=binary`, 'content-length': '2048' },
+    });
+    response.resolve(metadata);
+    await settle();
+    const snapshot = probes.snapshot(fileUrl);
+    assert.deepEqual(snapshot, {
+      status: 'ready', round: 0, deadline: 5_000, mime, size: 2048,
+    });
+    assert.equal(clock.tasks.size, 0, 'HEAD success clears the deadline even for previewable MIME types');
+    await clock.advance(10_000);
+    assert.equal(probes.snapshot(fileUrl), snapshot, 'ready metadata remains stable without media events');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.method, 'HEAD');
+    assert.equal(calls[0]!.body, undefined);
+    assert.equal(metadata.bodyUsed, false);
+    probes.dispose();
+  }
+});
+
+test('preview MIME and size formatting helpers remain available to the UI', () => {
+  assert.equal(previewKind('image/png'), 'image');
   assert.equal(previewKind('video/mp4'), 'video');
   assert.equal(previewKind('audio/mpeg'), 'audio');
   assert.equal(previewKind('text/html'), null);
   assert.equal(formatBytes(1_048_576), '1.0 MiB');
+});
+
+test('ready metadata survives hiding and remounting beyond the HEAD deadline without another request', async () => {
+  const clock = new Clock();
+  let requests = 0;
+  const probes = new FileProbes(async () => {
+    requests++;
+    return new Response(null, { headers: { 'content-type': 'video/mp4' } });
+  }, apiBase, clock);
+  const off = probes.subscribe(fileUrl, () => {});
+  await settle();
+  const snapshot = probes.snapshot(fileUrl);
+  assert.equal(snapshot.status, 'ready');
+  probes.setVisible(false);
+  off();
+  await clock.advance(5_001);
+  probes.setVisible(true);
+  probes.subscribe(fileUrl, () => {});
+  await clock.advance(10_000);
+  assert.equal(probes.snapshot(fileUrl), snapshot);
+  assert.equal(requests, 1);
+  assert.equal(clock.tasks.size, 0);
   probes.dispose();
 });
 
-test('media callbacks cannot extend a hidden round, and later playback errors still show fallback', async () => {
+test('unsubscribing one shared consumer leaves the other consumer HEAD request active', async () => {
   const clock = new Clock();
-  const probes = new FileProbes(async () => new Response(null, { headers: { 'content-type': 'video/mp4' } }), apiBase, clock);
+  const response = deferred<Response>();
+  const signals: AbortSignal[] = [];
+  let notificationsA = 0;
+  let notificationsB = 0;
+  const probes = new FileProbes((_path, init) => {
+    signals.push(init!.signal as AbortSignal);
+    return response.promise;
+  }, apiBase, clock);
+  const offA = probes.subscribe(fileUrl, () => notificationsA++);
+  probes.subscribe(fileUrl, () => notificationsB++);
+  offA();
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0]!.aborted, false);
+  response.resolve(new Response(null));
+  await settle();
+  assert.equal(notificationsA, 0);
+  assert.equal(notificationsB, 1);
+  assert.equal(probes.snapshot(fileUrl).status, 'ready');
+  assert.equal(clock.tasks.size, 0);
+  probes.dispose();
+});
+
+test('late aborted results cannot overwrite a resumed or explicitly retried HEAD check', async () => {
+  for (const action of ['hide', 'unmount', 'retry']) {
+    for (const result of ['success', 'error']) {
+      const clock = new Clock();
+      const calls: { signal: AbortSignal; response: ReturnType<typeof deferred<Response>> }[] = [];
+      const probes = new FileProbes((_path, init) => {
+        const response = deferred<Response>();
+        calls.push({ signal: init!.signal as AbortSignal, response });
+        return response.promise;
+      }, apiBase, clock);
+      const off = probes.subscribe(fileUrl, () => {});
+      await clock.advance(1_000);
+      if (action === 'hide') {
+        probes.setVisible(false);
+        probes.setVisible(true);
+      } else if (action === 'unmount') {
+        off();
+        probes.subscribe(fileUrl, () => {});
+      } else {
+        probes.retry(fileUrl);
+      }
+      assert.equal(calls.length, 2);
+      assert.equal(calls[0]!.signal.aborted, true);
+      const snapshot = probes.snapshot(fileUrl);
+      assert.deepEqual(snapshot, {
+        status: 'pending', round: action === 'retry' ? 1 : 0, deadline: action === 'retry' ? 6_000 : 5_000,
+      });
+      if (result === 'success') {
+        calls[0]!.response.resolve(new Response(null, { headers: { 'content-type': 'image/png' } }));
+      } else {
+        calls[0]!.response.reject(new Error('Stale network error'));
+      }
+      await settle();
+      assert.equal(probes.snapshot(fileUrl), snapshot);
+      assert.equal(calls[1]!.signal.aborted, false);
+      calls[1]!.response.resolve(new Response(null, { headers: { 'content-type': 'text/plain' } }));
+      await settle();
+      assert.deepEqual(probes.snapshot(fileUrl), { ...snapshot, status: 'ready', mime: 'text/plain' });
+      assert.equal(clock.tasks.size, 0);
+      await clock.advance(10_000);
+      assert.equal(calls.length, 2);
+      probes.dispose();
+    }
+  }
+});
+
+test('a HEAD success at the deadline is a timeout even before the timer callback runs', async () => {
+  const clock = new Clock();
+  const response = deferred<Response>();
+  const probes = new FileProbes(() => response.promise, apiBase, clock);
   probes.subscribe(fileUrl, () => {});
+  clock.time = 5_000;
+  response.resolve(new Response(null));
   await settle();
-  probes.setVisible(false);
-  await clock.advance(5_001);
-  probes.mediaReady(fileUrl, 0);
-  assert.equal(probes.snapshot(fileUrl).preview, 'failed');
-  probes.setVisible(true);
-  probes.retry(fileUrl);
-  await settle();
-  probes.mediaReady(fileUrl, 1);
-  assert.equal(probes.snapshot(fileUrl).preview, 'ready');
-  await clock.advance(10_000);
-  probes.mediaFailed(fileUrl, 1);
-  assert.equal(probes.snapshot(fileUrl).preview, 'failed');
+  assert.equal(probes.snapshot(fileUrl).status, 'unavailable');
+  assert.deepEqual(probes.snapshot(fileUrl).failure, { kind: 'timeout' });
   assert.equal(clock.tasks.size, 0);
   probes.dispose();
 });

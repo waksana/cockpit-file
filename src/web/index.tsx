@@ -114,6 +114,7 @@ export const activate: ActivateFrontend = context => {
             onClick={() => uploads.remove(composer.draft, item.id)} aria-label={`移除 ${item.name}`}><ActionIcon name="remove" /></button>;
           const props = {
             name: item.name, actions, retry, download: false, error: item.error,
+            errorLabel: '上传失败',
             busy: item.status === 'uploading',
             status: item.status === 'uploading' ? '上传中' : item.status === 'ready' ? '已上传，等待加入草稿' : '上传未完成',
           };
@@ -121,7 +122,7 @@ export const activate: ActivateFrontend = context => {
             {item.url ? <FileCard {...props} url={item.url} />
               : item.file && previewKind(item.file.type) === 'image'
                 ? <BlobCard {...props} file={item.file} />
-                : <FileTile {...props} actions={<>{retry}{actions}</>} metadata={formatBytes(item.size)} />}
+                : <FileTile {...props} metadata={formatBytes(item.size)} />}
           </li>;
         })}
       </ul>}
@@ -134,32 +135,86 @@ export const activate: ActivateFrontend = context => {
     retry?: ReactNode;
     status?: string;
     error?: string;
+    errorLabel?: string;
     busy?: boolean;
     download?: boolean;
+    inline?: boolean;
   }
 
   interface Preview {
     url: string;
     key: string;
     kind: 'image' | 'video' | 'audio';
-    loading: boolean;
-    ready: () => void;
-    failed: () => void;
   }
 
-  function FileTile({ name, status, error, busy = false, metadata, actions, preview }: CardProps & {
-    metadata?: string; preview?: Preview;
+  interface MediaRun {
+    key: string;
+    resource: string;
+    deadline: number;
+    status: 'pending' | 'ready' | 'failed';
+    timeout?: ReturnType<typeof setTimeout>;
+  }
+
+  function FileTile({ name, status, error, errorLabel = '文件异常', busy = false, metadata, actions, retry,
+    preview, inline = false, href, downloadUrl, identity = name }: CardProps & {
+    metadata?: string; preview?: Preview; href?: string; downloadUrl?: string; identity?: string | object;
   }) {
-    const [expanded, setExpanded] = React.useState<string>();
+    if (inline && !href) throw new Error('An inline file reference requires its canonical resource URL');
+    const [expanded, setExpanded] = React.useState<{ identity: string | object; revision: number }>();
+    const sequence = React.useRef(0);
     const dialog = React.useRef<HTMLDialogElement>(null);
-    const detailsKey = `details:${name}`;
-    const detailsOpen = expanded === detailsKey && !preview;
-    const open = expanded === detailsKey || (preview !== undefined && expanded === preview.key);
+    const rowTrigger = React.useRef<HTMLButtonElement>(null);
+    const closeButton = React.useRef<HTMLButtonElement>(null);
+    const open = expanded?.identity === identity;
+    const [attempt, setAttempt] = React.useState(0);
+    const [media, setMedia] = React.useState<{ resource: string; status: 'pending' | 'ready' | 'failed'; error?: string }>();
+    const run = React.useRef<MediaRun | undefined>(undefined);
+    const mediaKey = open && preview ? `${preview.key}:${expanded.revision}:${attempt}` : undefined;
+    const currentMedia = preview && media?.resource === preview.key ? media : undefined;
+    const mediaError = currentMedia?.status === 'failed' ? currentMedia.error : undefined;
+    const mediaLoading = !!mediaKey && (!currentMedia || currentMedia.status === 'pending');
+    const failure = error || mediaError;
     const label = preview ? `${preview.kind === 'image' ? '查看' : '播放'} ${name}` : `文件详情：${name}`;
     const suffix = /(?:\.tar\.(?:gz|bz2|xz|zst)|\.[a-z0-9]{1,10})$/i.exec(name);
     const extension = suffix && suffix.index > 0 ? suffix[0] : '';
     const stem = extension ? name.slice(0, -extension.length) : name;
     const information = [status, metadata].filter(Boolean).join(' · ');
+    const summary = error ? errorLabel : mediaError ? '预览失败' : mediaLoading ? '预览中'
+      : busy ? status || '检查中' : status && status !== '准备就绪' ? status : metadata || status || '文件';
+    const fileIcon = preview?.kind === 'image' ? 'image' : preview?.kind === 'video' || preview?.kind === 'audio' ? 'play'
+      : /\.(?:[cm]?[jt]sx?|py|go|rs|java|sh|css|json|ya?ml|toml)(?:[:#].*)?$/i.test(name) ? 'file-code' : 'file';
+    const begin = () => {
+      if (context.signal.aborted) return;
+      setMedia(undefined);
+      setExpanded({ identity, revision: ++sequence.current });
+    };
+    const mediaResult = (key: string | undefined, ready: boolean) => {
+      const active = run.current;
+      if (!active || active.key !== key || context.signal.aborted || active.status === 'failed' ||
+          (ready && active.status === 'ready')) return;
+      clearTimeout(active.timeout);
+      const timedOut = ready && Date.now() >= active.deadline;
+      active.status = ready && !timedOut ? 'ready' : 'failed';
+      setMedia({ resource: active.resource, status: active.status,
+        ...(active.status === 'failed' ? { error: timedOut
+          ? '预览加载超时，原件仍可下载。可以重试预览。'
+          : '图片或媒体未能显示，原件仍可下载。可以重试预览。' } : {}) });
+    };
+    React.useLayoutEffect(() => {
+      if (!mediaKey || !preview || context.signal.aborted) return;
+      const active: MediaRun = { key: mediaKey, resource: preview.key, deadline: Date.now() + 5_000, status: 'pending' };
+      run.current = active;
+      setMedia({ resource: preview.key, status: 'pending' });
+      active.timeout = setTimeout(() => {
+        if (run.current !== active || context.signal.aborted) return;
+        run.current.status = 'failed';
+        setMedia({ resource: active.resource, status: 'failed', error: '预览加载超时，原件仍可下载。可以重试预览。' });
+      }, 5_000);
+      return () => {
+        clearTimeout(active.timeout);
+        if (run.current === active) run.current = undefined;
+      };
+    }, [mediaKey]);
     React.useEffect(() => {
       if (!open || context.signal.aborted) return;
       const element = dialog.current;
@@ -171,55 +226,76 @@ export const activate: ActivateFrontend = context => {
         close();
       };
     }, [open, expanded]);
-    const icon = <Icon name="file" />;
-    const media = preview && (preview.kind === 'image'
-      ? <img key={preview.key} className="cf-media" src={preview.url} alt="" data-loading={preview.loading}
-        onLoad={preview.ready} onError={preview.failed} />
-      : preview.kind === 'video'
-        ? <video key={preview.key} className="cf-media" src={preview.url} preload="metadata" muted playsInline
-          aria-hidden="true" onLoadedMetadata={preview.ready} onError={preview.failed} />
-        : <><audio key={preview.key} className="cf-audio-probe" src={preview.url} preload="metadata"
-          onLoadedMetadata={preview.ready} onError={preview.failed} />{icon}</>);
-    return <span className="cf-card" aria-busy={busy}>
-      <button type="button" className="ck-button cf-card-open" aria-label={label} aria-haspopup="dialog"
-        aria-description={error || information} title={name} onClick={() => {
-          if (!context.signal.aborted) setExpanded(preview?.key ?? detailsKey);
+    const previewRetry = mediaError && <button type="button" className="ck-icon-button" title="重试预览"
+      aria-label={`重新加载 ${name}`} onClick={() => {
+        if (context.signal.aborted) return;
+        setMedia(undefined);
+        setAttempt(value => value + 1);
+        if (!open) {
+          rowTrigger.current?.focus({ preventScroll: true });
+          begin();
+        }
+      }}><ActionIcon name="retry" /></button>;
+    const retryAction = retry || previewRetry;
+    const downloadAction = downloadUrl && <a className="ck-icon-button" href={downloadUrl} download={name}
+      title="下载" aria-label={`下载 ${name}`}><ActionIcon name="download" /></a>;
+    return <span className={inline ? 'cf-reference' : 'cf-row'} aria-busy={busy || mediaLoading}>
+      {inline ? <a className="cf-reference-link" href={href} aria-label={label} aria-haspopup="dialog"
+        aria-description={failure || information} title={failure || name}
+        onClick={event => {
+          if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.defaultPrevented) return;
+          event.preventDefault();
+          begin();
         }}>
-        <span className="cf-thumbnail" aria-hidden="true">
-          {media ?? icon}
-          {preview && preview.kind !== 'image' && <span className="cf-play" aria-hidden="true"><Icon name="play" /></span>}
+        <span className="cf-reference-icon" aria-hidden="true"><Icon name={fileIcon} /></span>
+        <span className="cf-reference-name">{name}</span>
+        <span className={`cf-reference-state${failure ? ' cf-error' : ''}`} aria-hidden="true">
+          <Icon name={failure ? 'circle-alert' : busy || mediaLoading ? 'loader-circle' : 'arrow-up-right'} />
         </span>
-        <span className="cf-card-details">
-          <span className="cf-card-name" title={name}>
+      </a> : <>
+        <button ref={rowTrigger} type="button" className="ck-button cf-row-open" aria-label={label} aria-haspopup="dialog"
+          aria-description={failure || information} title={name} onClick={begin}>
+          <span className="cf-file-icon" aria-hidden="true"><Icon small name={fileIcon} /></span>
+          <span className="cf-row-name">
             <span className="cf-name-stem" dir="auto">{stem}</span>{extension && <bdi className="cf-name-extension">{extension}</bdi>}
           </span>
-          {error ? <span className="cf-card-status cf-error" title={error} role="alert">文件异常 · 查看原因</span>
-            : <span className="cf-card-status" title={information} role={busy ? 'status' : undefined}>{information}</span>}
-          <span className="cf-progress-slot">
-            {busy && <progress className="cf-progress" aria-label={`${name}：${status || '文件加载中'}`} />}
-          </span>
+          <span className={`cf-row-status${failure ? ' cf-error' : ''}`} title={failure || information}>{summary}</span>
+          {(busy || mediaLoading) && <progress className="cf-progress" aria-label={`${name}：${summary}`} />}
+        </button>
+        <span className="cf-row-actions">
+          <span className="cf-action-slot">{retryAction}</span>
+          <span className="cf-action-slot">{actions || downloadAction}</span>
         </span>
-      </button>
-      <span className="cf-card-actions">{actions}</span>
-      {open && page?.body && createPortal(<dialog key={expanded} ref={dialog} className="cf-preview-dialog" aria-label={`${detailsOpen ? '文件详情' : '预览'} ${name}`}
+      </>}
+      {failure && <span className="cf-announcement" role="alert">{failure}</span>}
+      {open && page?.body && createPortal(<dialog key={expanded.revision} ref={dialog} className="cf-preview-dialog" aria-label={`${preview && !failure ? '预览' : '文件详情'} ${name}`}
         onClose={() => setExpanded(current => current === expanded ? undefined : current)}>
         <span className="cf-dialog-header">
           <span className="cf-dialog-name" dir="auto">{name}</span>
-          <button type="button" className="ck-button" autoFocus onClick={() => dialog.current?.close()}>
+          <button ref={closeButton} type="button" className="ck-button" autoFocus onClick={() => dialog.current?.close()}>
             <Icon small name="x" />
-            {detailsOpen ? '关闭详情' : '关闭预览'}
+            {preview && !failure ? '关闭预览' : '关闭详情'}
           </button>
         </span>
-        {(detailsOpen || error) && <div className="cf-file-information">
+        <div className="cf-file-information">
           {information && <p>{information}</p>}
-          {error && <p className="cf-error">{error}</p>}
-        </div>}
-        {!detailsOpen && (preview?.kind === 'image' ? <img className="cf-expanded-media" src={preview.url} alt={name}
-          onLoad={preview.ready} onError={preview.failed} />
-          : preview?.kind === 'video' ? <video className="cf-expanded-media" src={preview.url} aria-label={name} controls preload="metadata"
-            onLoadedMetadata={preview.ready} onError={preview.failed} />
-            : preview?.kind === 'audio' ? <audio className="cf-expanded-media" src={preview.url} aria-label={name} controls preload="metadata"
-              onLoadedMetadata={preview.ready} onError={preview.failed} /> : null)}
+          {failure && <p className="cf-error" role="alert">{failure}</p>}
+          {busy && <p role="status">{status || '正在检查文件状态…'}</p>}
+          {!busy && !preview && !failure && <p>此类型暂不支持预览。{downloadUrl ? '可以下载原件查看。' : ''}</p>}
+        </div>
+        {preview && !mediaError && (preview.kind === 'image' ? <img key={mediaKey} className="cf-expanded-media"
+          src={preview.url} alt={name} onLoad={() => mediaResult(mediaKey, true)} onError={() => mediaResult(mediaKey, false)} />
+          : preview.kind === 'video' ? <video key={mediaKey} className="cf-expanded-media" src={preview.url} aria-label={name}
+            controls preload="metadata" onLoadedMetadata={() => mediaResult(mediaKey, true)} onError={() => mediaResult(mediaKey, false)} />
+            : <audio key={mediaKey} className="cf-expanded-media" src={preview.url} aria-label={name} controls preload="metadata"
+              onLoadedMetadata={() => mediaResult(mediaKey, true)} onError={() => mediaResult(mediaKey, false)} />)}
+        <div className="cf-dialog-actions">
+          {retryAction && <span className="cf-dialog-retry" onClickCapture={() => {
+            // Retry replaces its own action; keep keyboard focus inside the modal.
+            closeButton.current?.focus({ preventScroll: true });
+          }}>{retryAction}</span>}
+          {downloadAction}{actions}
+        </div>
       </dialog>, page.body)}
     </span>;
   }
@@ -237,46 +313,44 @@ export const activate: ActivateFrontend = context => {
     }
   }
 
-  function FileCard({ url, name, actions, retry, status, busy, error, download = true }: CardProps & { url: string }) {
+  function FileCard({ url, name, actions, retry, status, busy, error, errorLabel, inline, download = true }: CardProps & { url: string }) {
     const state = React.useSyncExternalStore(
       React.useCallback(listener => probes.subscribe(url, listener), [url]),
       React.useCallback(() => probes.snapshot(url), [url]),
     );
     const kind = state.mime ? previewKind(state.mime) : null;
-    const loading = state.status === 'pending' || state.preview === 'pending';
-    const mediaReady = () => probes.mediaReady(url, state.round);
-    const mediaFailed = () => probes.mediaFailed(url, state.round);
-    return <FileTile name={name} busy={busy ?? loading}
-      status={status ? `${status}${loading && busy === undefined ? ' · 预览加载中' : ''}` : loading ? '文件加载中' : undefined}
+    const loading = state.status === 'pending';
+    const checkErrorLabel = state.failure?.kind === 'timeout' ? '检查超时'
+      : state.failure?.kind === 'network' ? '请求失败'
+        : state.failure?.kind === 'http' && [401, 403].includes(state.failure.status) ? '无访问权限'
+          : state.failure?.kind === 'http' && state.failure.status === 422 ? '捕获失败' : '检查失败';
+    return <FileTile name={name} identity={url} href={url} inline={inline} busy={busy ?? loading}
+      status={status || (loading ? '检查中' : undefined)}
       metadata={state.size !== undefined ? formatBytes(state.size) : state.mime}
       error={error || state.error}
-      preview={state.status === 'ready' && state.preview !== 'failed' && kind ? {
-        url, key: `${url}:${state.round}`, kind, loading: state.preview === 'pending', ready: mediaReady, failed: mediaFailed,
+      errorLabel={error ? errorLabel : checkErrorLabel}
+      preview={state.status === 'ready' && kind ? {
+        url, key: `${url}:${state.round}`, kind,
       } : undefined}
-      actions={<>
-        {retry ?? ((state.status === 'unavailable' || state.preview === 'failed') &&
+      retry={retry ?? (state.status === 'unavailable' &&
           <button type="button" className="ck-icon-button" title="重试预览" onClick={() => probes.retry(url)}
             aria-label={`重新加载 ${name}`}><ActionIcon name="retry" /></button>)}
-        {download && state.status === 'ready' && <a className="ck-icon-button" href={`${url}?download=1`} download={name}
-          title="下载" aria-label={`下载 ${name}`}><ActionIcon name="download" /></a>}
-        {actions}
-      </>} />;
+      downloadUrl={download && state.status === 'ready' ? `${url}?download=1` : undefined}
+      actions={actions} />;
   }
 
   type BlobState = {
     data: string | undefined;
     mimeType: string;
     file?: File;
-    deadline: number;
-    preview: 'pending' | 'ready' | 'failed';
   } & ({ url: string; size: number; mime: string; error?: string } | { url?: undefined; error: string });
 
-  function BlobCard({ attachment, file, name, actions, retry, status, busy, error: uploadError, download = true }: CardProps & {
+  function BlobCard({ attachment, file, name, actions, retry, status, busy, error: uploadError, errorLabel, download = true }: CardProps & {
     attachment?: NativeBlob; file?: File;
   }) {
     const [state, setState] = React.useState<BlobState>();
-    const [round, setRound] = React.useState(0);
     const { data, mimeType, omittedReason } = attachment ?? { mimeType: file?.type || 'application/octet-stream' };
+    const identity = React.useMemo(() => ({}), [file, data, mimeType, omittedReason]);
     const unavailable = file ? undefined : attachment ? unavailableBlobReason(attachment) : '原生未提供附件数据';
     React.useEffect(() => {
       if (disposed || context.signal.aborted || unavailable) {
@@ -284,60 +358,38 @@ export const activate: ActivateFrontend = context => {
         return;
       }
       let url: string | undefined;
-      let timer: ReturnType<typeof setTimeout> | undefined;
       const release = () => {
         if (url) URL.revokeObjectURL(url);
         url = undefined;
-        clearTimeout(timer);
         blobReleases.delete(release);
       };
       try {
         const blob = file ?? decodeNativeBlob({ type: 'blob', data, mimeType }, maxBytes);
         url = URL.createObjectURL(blob);
-        const preview = previewKind(blob.type) ? 'pending' : 'ready';
-        setState({ data, mimeType, file, url, size: blob.size, mime: blob.type, preview, deadline: Date.now() + 5_000 });
-        if (preview === 'pending') timer = setTimeout(() => {
-          if (!disposed) setState(previous => previous && previous.url === url && previous.preview === 'pending'
-            ? { ...previous, preview: 'failed', error: '预览加载超时，仍可下载原件' } : previous);
-        }, 5_000);
+        setState({ data, mimeType, file, url, size: blob.size, mime: blob.type });
         blobReleases.add(release);
       } catch (error) {
         release();
         context.report(error);
-        setState({ data, mimeType, file, preview: 'failed', deadline: 0,
+        setState({ data, mimeType, file,
           error: error instanceof Error ? error.message : '原生附件无法读取' });
       }
       return release;
-    }, [data, mimeType, omittedReason, round, file]);
+    }, [data, mimeType, omittedReason, file]);
     const current = state?.data === data && state?.mimeType === mimeType && state?.file === file ? state : undefined;
     const error = unavailable ?? current?.error;
     const resource = !unavailable && current?.url ? current : undefined;
     const kind = resource?.mime ? previewKind(resource.mime) : null;
-    const loading = !error && (!current || current.preview === 'pending');
-    const mediaResult = (ready: boolean) => {
-      if (disposed || !resource) return;
-      setState(previous => {
-        if (previous?.url !== resource.url || (ready && previous.preview !== 'pending')) return previous;
-        const available = ready && Date.now() < previous.deadline;
-        return { ...previous, preview: available ? 'ready' : 'failed',
-          ...(available ? {} : { error: '无法预览，仍可下载原件' }) };
-      });
-    };
-    return <FileTile name={name} busy={busy ?? loading}
-      status={status ? `${status}${loading && busy === undefined ? ' · 预览加载中' : ''}` : loading ? '文件加载中' : undefined}
+    const loading = !error && !current;
+    return <FileTile name={name} identity={identity} busy={busy ?? loading}
+      status={status || (loading ? '检查中' : undefined)}
       metadata={resource ? formatBytes(resource.size) : file ? formatBytes(file.size) : undefined}
       error={uploadError || (error ? `${resource ? '' : '附件不可用：'}${error}` : undefined)}
-      preview={kind && resource && resource.preview !== 'failed' ? {
-        url: resource.url, key: resource.url, kind, loading, ready: () => mediaResult(true), failed: () => mediaResult(false),
+      errorLabel={uploadError ? errorLabel : '附件不可用'}
+      preview={kind && resource ? {
+        url: resource.url, key: resource.url, kind,
       } : undefined}
-      actions={<>
-        {retry ?? (resource?.preview === 'failed' &&
-          <button type="button" className="ck-icon-button" title="重试预览" onClick={() => setRound(value => value + 1)}
-            aria-label={`重新加载 ${name}`}><ActionIcon name="retry" /></button>)}
-        {download && resource && <a className="ck-icon-button" href={resource.url} download={name}
-          title="下载" aria-label={`下载 ${name}`}><ActionIcon name="download" /></a>}
-        {actions}
-      </>} />;
+      retry={retry} downloadUrl={download && resource ? resource.url : undefined} actions={actions} />;
   }
 
   function FileRenderer({ node }: { node: RenderNode }) {
@@ -346,7 +398,7 @@ export const activate: ActivateFrontend = context => {
     }
     const url = nodeUrl(node);
     if (!url) return <span>{node.label}</span>;
-    return <FileCard key={url} url={url} name={node.label || node.attachment?.displayName || '文件'} />;
+    return <FileCard key={url} url={url} inline={node.kind !== 'attachment'} name={node.label || node.attachment?.displayName || '文件'} />;
   }
 
   let disposed = false;

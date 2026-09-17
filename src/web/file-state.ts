@@ -437,8 +437,8 @@ export interface ProbeSnapshot {
   readonly deadline: number;
   readonly mime?: string;
   readonly size?: number;
-  readonly preview?: 'pending' | 'ready' | 'failed';
   readonly error?: string;
+  readonly failure?: { kind: 'timeout' } | { kind: 'network' } | { kind: 'http'; status: number };
 }
 
 export interface ProbeClock {
@@ -525,48 +525,19 @@ export class FileProbes {
     this.resume(url, entry);
   }
 
-  mediaReady(url: string, round: number): void {
-    this.mediaResult(url, round, true);
-  }
-
-  mediaFailed(url: string, round: number): void {
-    this.mediaResult(url, round, false);
-  }
-
-  private mediaResult(url: string, round: number, ready: boolean): void {
-    if (this.disposed) return;
-    const entry = this.entries.get(url);
-    if (!entry || entry.snapshot.round !== round || entry.snapshot.status !== 'ready' ||
-        (entry.snapshot.preview !== 'pending' && (ready || entry.snapshot.preview !== 'ready'))) return;
-    if (ready && this.clock.now() >= entry.snapshot.deadline) {
-      this.expire(entry);
-      return;
-    }
-    this.pause(entry);
-    entry.snapshot = {
-      ...entry.snapshot, preview: ready ? 'ready' : 'failed',
-      ...(ready ? {} : { error: 'Preview unavailable. You can still download the original file.' }),
-    };
-    this.notify(entry);
-  }
-
   private active(entry: ProbeEntry): boolean {
     return !this.disposed && this.visible && entry.listeners.size > 0;
   }
 
-  private waiting(entry: ProbeEntry): boolean {
-    return entry.snapshot.status === 'pending' || entry.snapshot.preview === 'pending';
-  }
-
   private resume(url: string, entry: ProbeEntry): void {
-    if (!this.active(entry) || !this.waiting(entry)) return;
+    if (!this.active(entry) || entry.snapshot.status !== 'pending') return;
     const remaining = entry.snapshot.deadline - this.clock.now();
     if (remaining <= 0) {
       this.expire(entry);
       return;
     }
     entry.timeout ??= this.clock.setTimeout(() => this.expire(entry), remaining);
-    if (entry.snapshot.status !== 'pending' || entry.controller || entry.retryTimer !== undefined) return;
+    if (entry.controller || entry.retryTimer !== undefined) return;
     const delay = entry.nextAt - this.clock.now();
     if (delay > 0) {
       entry.retryTimer = this.clock.setTimeout(() => {
@@ -579,12 +550,10 @@ export class FileProbes {
   }
 
   private expire(entry: ProbeEntry): void {
-    this.pause(entry);
-    if (!this.waiting(entry)) return;
-    entry.snapshot = entry.snapshot.status === 'ready'
-      ? { ...entry.snapshot, preview: 'failed', error: 'Preview did not load within five seconds. Download or retry.' }
-      : { ...entry.snapshot, status: 'unavailable', error: 'File unavailable after five seconds. Retry to check again.' };
-    this.notify(entry);
+    if (entry.snapshot.status !== 'pending') return;
+    this.fail(entry,
+      'File status check did not finish within five seconds. File availability is still unknown; retry to check again.',
+      { kind: 'timeout' });
   }
 
   private async check(url: string, entry: ProbeEntry): Promise<void> {
@@ -607,29 +576,28 @@ export class FileProbes {
         entry.snapshot = {
           ...entry.snapshot, status: 'ready', mime,
           ...(size !== undefined && Number.isSafeInteger(size) ? { size } : {}),
-          ...(previewKind(mime) ? { preview: 'pending' } : {}),
         };
-        if (!entry.snapshot.preview) this.pause(entry);
+        this.pause(entry);
         this.notify(entry);
       } else if ((response.status === 202 || response.status === 404) &&
-                 response.headers.get('x-cockpit-file-state') !== 'failed') {
+                 response.headers.get('x-file-state') !== 'failed') {
         entry.nextAt = this.clock.now() + Math.min(150 * 2 ** entry.attempts++, 1_000);
         this.resume(url, entry);
       } else {
         this.fail(entry, response.status === 401 || response.status === 403
           ? 'You do not have access to this file.'
-          : `File unavailable (HTTP ${response.status}).`);
+          : `File status check failed (HTTP ${response.status}).`, { kind: 'http', status: response.status });
       }
     } catch (error) {
       if (controller.signal.aborted || !this.active(entry) || entry.controller !== controller) return;
       entry.controller = undefined;
-      this.fail(entry, `File check failed: ${message(error)}`);
+      this.fail(entry, `File status check failed: ${message(error)}`, { kind: 'network' });
     }
   }
 
-  private fail(entry: ProbeEntry, error: string): void {
+  private fail(entry: ProbeEntry, error: string, failure: NonNullable<ProbeSnapshot['failure']>): void {
     this.pause(entry);
-    entry.snapshot = { ...entry.snapshot, status: 'unavailable', error };
+    entry.snapshot = { ...entry.snapshot, status: 'unavailable', error, failure };
     this.notify(entry);
   }
 

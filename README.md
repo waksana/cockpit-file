@@ -8,7 +8,7 @@ Cockpit File 是 [Cockpit](https://github.com/waksana/cockpit) 的文件模块�
 ## 首版范围
 
 - **聊天附件**：选择、拖入或粘贴文件，准备好后随文字一起发送。
-- **文件卡片**：在聊天中查看图片、预览支持的媒体或下载原件。
+- **文件展示**：附件使用紧凑单行，Markdown 引用随正文折行，点击查看媒体或下载原件。
 - **消息中的文件版本**：同一路径的文件修改后再次交付，旧消息仍保留原来保存的版本。
 
 全局文件库和汉堡菜单中的管理页面列入 [Roadmap](docs/roadmap.md)，不在首版实现。
@@ -19,7 +19,7 @@ Agent 可以照常使用 Markdown 引用文件，不需要学习额外的发送�
 
 ## 当前状态
 
-**本次发行版本为 0.1.5**；可下载资产以该版本 Release workflow 成功发布为准。
+**当前开发版本为 0.1.6（尚未发布）**；已发布资产以 GitHub Releases 为准。
 需要 Cockpit v0.2.0 的 Module API v1 / Module UI v1；Cockpit v0.1.0 不支持此模块。
 需要已合入的 [waksana/cockpit#7](https://github.com/waksana/cockpit/pull/7) 输入区配套调整；
 准确的构建基线见[安装指南](docs/installation.md)。
