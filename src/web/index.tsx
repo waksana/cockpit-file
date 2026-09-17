@@ -1,13 +1,14 @@
 import type {
-  ActivateFrontend, AttachmentProps, ComposerInteractions, ComposerProps,
+  ActivateFrontend, AttachmentProps,
   DraftReference, MarkdownNode, MarkdownRendererProps, ModuleFrontend,
 } from '@cockpit/module-api';
-import type { ReactNode } from 'react';
+import type { ReactNode, SyntheticEvent } from 'react';
 import { isLocalFileReference, messageFileUrl, nativeFileUrl } from '../shared/files.ts';
 import { DEFAULT_MAX_BYTES, FileProbes, formatBytes, previewKind, UploadStore } from './file-state.ts';
 import { decodeNativeBlob, unavailableBlobReason, type NativeBlob } from './blob.ts';
 import { icons } from './icons.ts';
 import { registerFileDrafts, type FileComposerContext, type FileDraft } from './file-draft.ts';
+import { FileInputs } from './file-input.ts';
 
 export const activate: ActivateFrontend = context => {
   if (context.apiVersion !== 2 || context.uiVersion !== 1 || typeof context.createPortal !== 'function' ||
@@ -38,6 +39,13 @@ export const activate: ActivateFrontend = context => {
     dispose: store => store.dispose(),
   }).get();
   const page = typeof document === 'undefined' ? undefined : document;
+  const inputs = context.state.register({
+    id: 'file-inputs',
+    create: () => new FileInputs({
+      uploads, report: context.report, signal: context.signal, page, enabled: !!nativePathPrefix,
+    }),
+    dispose: store => store.dispose(),
+  }).get();
   const visibilityChanged = () => probes.setVisible(context.state.host.getSnapshot().visible);
   visibilityChanged();
   resources.add(context.state.host.subscribe(visibilityChanged));
@@ -67,7 +75,7 @@ export const activate: ActivateFrontend = context => {
     return <Icon small name={name === 'remove' ? 'x' : name === 'retry' ? 'rotate-cw' : 'download'} />;
   }
 
-  function UploadAction({ composer, interactions }: { composer: ComposerProps; interactions: ComposerInteractions }) {
+  function UploadAction(composer: FileComposerContext) {
     const draft = useDraft(composer.draft);
     const disabled = composer.disabled || draft.pending || composer.operation !== 'prompt' || !nativePathPrefix || context.signal.aborted;
     return <button
@@ -76,10 +84,21 @@ export const activate: ActivateFrontend = context => {
         disabled={disabled}
         title={composer.operation === 'prompt' ? `添加文件（单个最多 ${formatBytes(maxBytes)}）` : '当前操作不接受附件'}
         aria-label="添加文件"
-        onClick={() => { if (!disabled && !disposed) interactions.pickFiles(); }}
+        onClick={() => { if (!disabled && !disposed) inputs.pick(composer); }}
       >
         <Icon name="paperclip" />
       </button>;
+  }
+
+  function composeInput<Event extends SyntheticEvent>(
+    inherited: ((event: Event) => void) | undefined, handle: (event: Event) => void,
+  ) {
+    return (event: Event) => {
+      try {
+        inherited?.(event);
+        if (!event.defaultPrevented) handle(event);
+      } catch (error) { context.report(error); }
+    };
   }
 
   function AttachmentList(composer: FileComposerContext) {
@@ -407,6 +426,7 @@ export const activate: ActivateFrontend = context => {
   function dispose() {
     if (disposed) return;
     disposed = true;
+    inputs.dispose();
     context.signal.removeEventListener('abort', dispose);
   }
   context.signal.addEventListener('abort', dispose, { once: true });
@@ -417,19 +437,25 @@ export const activate: ActivateFrontend = context => {
       id: 'file-composer',
       boundary: 'composer',
       wrap: Base => function FileComposer(props) {
+        if (disposed) return <Base {...props} />;
         const draft = fileDrafts.get(props.draft);
         if (!draft) return <Base {...props} />;
         return <Base {...props}
-          children={<>{props.children}<AttachmentList draft={draft} operation={props.operation} disabled={props.disabled} /></>}
-          actions={interactions => <>{props.actions?.(interactions)}<UploadAction composer={props} interactions={interactions} /></>}
-          onFiles={selection => {
-            if (disposed || context.signal.aborted || !nativePathPrefix || selection.files.length === 0) {
-              return props.onFiles?.(selection) ?? false;
-            }
-            const captured = fileDrafts.get(selection.target.draft);
-            if (!captured) return props.onFiles?.(selection) ?? false;
-            return uploads.receive(selection.files, { ...selection.target, draft: captured });
-          }} />;
+          children={<>{props.children}<AttachmentList draft={draft} operation={props.operation} disabled={props.disabled} /></>} />;
+      },
+    }, {
+      id: 'file-editor',
+      boundary: 'composerEditor',
+      wrap: Base => function FileEditor(props) {
+        if (disposed) return <Base {...props} />;
+        const draft = fileDrafts.get(props.draft);
+        if (!draft || props.operation !== 'prompt') return <Base {...props} />;
+        const composer: FileComposerContext = { draft, operation: props.operation, disabled: props.disabled };
+        return <Base {...props}
+          children={<>{props.children}<UploadAction {...composer} /></>}
+          onPaste={composeInput(props.onPaste, event => inputs.paste(event, composer))}
+          onDrop={composeInput(props.onDrop, event => inputs.drop(event, composer))}
+          onDragOver={composeInput(props.onDragOver, event => inputs.dragOver(event, composer))} />;
       },
     }, {
       id: 'file-attachment',

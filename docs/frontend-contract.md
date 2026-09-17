@@ -33,7 +33,8 @@
 | --- | --- | --- |
 | state 服务 | 一次创建、带显式 disposer 的模块状态 | 复用 UploadStore、FileProbes；HTTP、资源和按草稿/URL 的选择器留在模块 |
 | draft schema | state 注册体系中的可验证字段、投影、ACK 和持久化 | 文件模块拥有附件数据；仅适用于 prompt |
-| composer middleware | 增强原输入组件的普通 props、actions 和输入回调 | 上传按钮及完整的就绪/上传中附件列表 |
+| composer middleware | 增强实际输入卡片的 children | 完整的就绪/上传中附件列表 |
+| composerEditor middleware | 增强实际文字编辑/发送行的普通 DOM props 和 children | 上传按钮、粘贴与拖放处理，不新增宿主文件 dispatcher |
 | attachment middleware | 一项原生历史附件的呈现 | 单行文件展示与按需预览，不承担草稿列表 |
 | Markdown renderer | 已解析 link/image 的排他渲染 | 行内文件引用，不处理原生/草稿附件 |
 
@@ -61,7 +62,7 @@ activate(context.apiVersion === 2)
     hasContent, project, acknowledge, persistence })
   context.state.register({ id, create, dispose })
   返回 apiVersion: 2
-  components: composer / attachment middleware
+  components: composer / composerEditor / attachment middleware
   markdown: link / image renderer
 ```
 
@@ -125,7 +126,7 @@ Markdown 引用使用带真实资源 href 的 `a`，继承正文的字号和行�
 
 | 场景 | 必需信息 |
 | --- | --- |
-| 输入组件/事件 | 捕获的 DraftReference、当前操作类型、输入可用性、唯一文件回调 |
+| 输入组件/事件 | DraftReference、当前操作类型、输入可用性及实际输入行的标准 DOM props |
 | 草稿 state | 稳定生命周期 id/purpose、基础快照与通用能力；模块 schema scope 提供自己的字段快照及 update |
 | 附件组件 | 原生历史附件描述、消息来源及基础显示；草稿行由模块自己的组件提供 |
 | Markdown 渲染 | 实际 link/image 节点的目标和显示文字，以及所属消息上下文 |
@@ -147,19 +148,21 @@ Markdown 引用使用带真实资源 href 的 `a`，继承正文的字号和行�
 
 | 事件 | 本体负责 | 模块负责 |
 | --- | --- | --- |
-| 选择文件 | pickFiles 在用户手势中打开唯一选择器并捕获目标 | 上传按钮调用 pickFiles；不另建第二条选择器处理路径 |
-| dragover/drop | 在聊天输入区域分派事件，协调是否消费 | 识别文件项并提交到上传入口 |
-| paste | 保持文字输入和输入法行为，协调文件项归属 | 接收剪贴板图片/文件，进入上传入口 |
+| 选择文件 | 不创建或调度选择器 | 模块服务在用户手势中创建选择器，捕获原草稿并负责取消/清理/迟到结果 |
+| dragover/drop | 在实际输入行转交普通 DOM props，不解释文件 | middleware 识别文件、遵循事件消费状态，提交到模块上传入口 |
+| paste | 原文字编辑器和输入法行为 | middleware 处理文件但保留混合剪贴板文字；无文件时保持默认行为 |
 | 草稿变更 | 提供当前快照和受控修改方法 | 读取自身需要的内容，刷新附件列表 |
 | 作用域释放 | 取消订阅、撤销该作用域的操作资格和阻止项 | 释放 object URL、临时视图资源等 |
 
 约束：
 
-- `onFiles(selection)` 同步返回交接结果；有效选择由模块 state 持有，异步上传随后继续。
-  模块负责有效选择的失败、取消和阻止；模块/schema 缺失不产生宿主文件恢复 UI。
+- 选择及上传生命周期全部由模块 state/service 持有，包括 picker 监听、草稿捕获和结果核对。
+  不使用宿主 onFiles/pickFiles/receiveFiles 或文件专用回调包装。
+  模块负责失败、取消和阻止；模块/schema 缺失不产生宿主文件恢复 UI。
 - 没有文件时不拦截普通粘贴；混合文字和文件时不得吞掉文字。
 - 不能注册全页面粗暴拦截，影响其他页面或其他模块。
 - 同一批文件只交给一个选中的处理器，不能多个插件各上传一次。
+- middleware 保留继承的 DOM 处理器并遵循 defaultPrevented，不从本体取得第二套选择事务身份。
 - 未明确处理前不无条件 preventDefault。
 - 选择器必须由真实用户手势打开，不能在异步 HTTP 完成后伪造手势。
 - 输入法组合输入、普通回车和发送快捷键仍由本体处理。

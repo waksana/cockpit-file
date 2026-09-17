@@ -12,8 +12,9 @@ Module manifest/backend API remain v1. This source is not a published or install
   Attachment components with file presentation. No host-built draft attachment group,
   dedicated list boundary or attachment-list hiding flag.
 - Keep a separate Markdown link/image renderer; native attachments no longer pass through it.
-- Use one host picker/paste/drop handoff with a captured draft reference and explicit
-  module-owned state for retained selections. Shared state outlives component/session navigation.
+- Own picker/paste/drop capture and cleanup in a registered file service and actual
+  editor-row middleware. The host has no file dispatcher or handoff contract.
+  Captured draft state outlives component/session navigation.
 - Native questions use separate request-keyed drafts; prompt text/files stay cached
   and return when the decision ends. File UI is absent on inapplicable draft purposes.
 - Middleware adds no HTML wrapper or empty placeholder. Preserve the existing

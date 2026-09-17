@@ -4,11 +4,11 @@ import test from 'node:test';
 import ts from 'typescript';
 import { icons } from './icons.ts';
 import type {
-  ActivateFrontend, AttachmentProps, ComposerFileSelection, ComposerInteractions, ComposerProps, ComposerTarget,
+  ActivateFrontend, AttachmentProps, ComposerEditorProps, ComposerProps, ComposerTarget,
   DraftPurpose, DraftReference, DraftSchemaScope, HostSnapshot, MarkdownNode, MarkdownRendererProps, ModuleDraft, ModuleDraftSnapshot,
   ModuleFrontend, ModuleFrontendContext, ModuleStateRegistry,
 } from '@cockpit/module-api';
-import type { ComponentType, ReactNode } from 'react';
+import type { ClipboardEvent, ComponentType, DragEvent } from 'react';
 import { fileDraftSchema, type FileAttachment, type FileState } from './file-draft.ts';
 
 const source = await readFile(new URL('./index.tsx', import.meta.url), 'utf8');
@@ -18,6 +18,7 @@ const compiled = ts.transpileModule(source, {
   .replaceAll("'../shared/files.ts'", JSON.stringify(new URL('../shared/files.ts', import.meta.url).href))
   .replaceAll("'./file-state.ts'", JSON.stringify(new URL('./file-state.ts', import.meta.url).href))
   .replaceAll("'./file-draft.ts'", JSON.stringify(new URL('./file-draft.ts', import.meta.url).href))
+  .replaceAll("'./file-input.ts'", JSON.stringify(new URL('./file-input.ts', import.meta.url).href))
   .replaceAll("'./icons.ts'", JSON.stringify(new URL('./icons.ts', import.meta.url).href))
   .replaceAll("'./blob.ts'", JSON.stringify(new URL('./blob.ts', import.meta.url).href));
 const { activate: activateModule } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`) as { activate: ActivateFrontend };
@@ -41,8 +42,23 @@ const apiBase = `https://host.test/cockpit/_modules/cockpit-file/${'b'.repeat(64
 const syntheticPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZAAAAABJRU5ErkJggg==';
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 const body = {};
+class NativeInput extends EventTarget {
+  type = '';
+  multiple = false;
+  files: readonly File[] = [];
+  value = '';
+  clicks = 0;
+  click() { this.clicks++; }
+}
+const nativeInputs: NativeInput[] = [];
 Object.defineProperty(globalThis, 'document', { configurable: true, value: {
   body, visibilityState: 'visible', addEventListener() {}, removeEventListener() {},
+  createElement(tag: string) {
+    assert.equal(tag, 'input');
+    const input = new NativeInput();
+    nativeInputs.push(input);
+    return input;
+  },
 } });
 
 const bindings = new WeakMap<DraftReference, ModuleDraft>();
@@ -306,12 +322,29 @@ function nativeComponent(frontend: ModuleFrontend) {
   return nativeComponents.get(frontend);
 }
 const composerComponents = new WeakMap<ModuleFrontend, ComponentType<ComposerProps>>();
+const editorComponents = new WeakMap<ModuleFrontend, ComponentType<ComposerEditorProps>>();
+function enhanceEditor(frontend: ModuleFrontend) {
+  if (!editorComponents.has(frontend)) {
+    const React = contexts.get(frontend)!.react;
+    const middleware = frontend.components!.find(item => item.boundary === 'composerEditor')!;
+    editorComponents.set(frontend, middleware.wrap(({
+      draft, operation: _operation, disabled, busy: _busy, placeholder, submitLabel, sendBlocked,
+      statusInHeader: _status, editorRef, children, onTextChange, onSubmit, ...dom
+    }) => React.createElement('div', { ...dom, className: 'chat-input' },
+      children, React.createElement('textarea', { ref: editorRef, placeholder, disabled,
+        value: draft.getSnapshot().text, onChange: event => onTextChange(event.currentTarget.value) }),
+      React.createElement('button', { type: 'button', 'aria-label': 'native send', disabled: disabled || sendBlocked,
+        onClick: onSubmit }, submitLabel || 'Send'))));
+  }
+  return editorComponents.get(frontend)!;
+}
 function enhanceComposer(frontend: ModuleFrontend) {
   if (!composerComponents.has(frontend)) {
     const React = contexts.get(frontend)!.react;
     const middleware = frontend.components!.find(item => item.boundary === 'composer')!;
+    const Editor = enhanceEditor(frontend);
     composerComponents.set(frontend, middleware.wrap(props => React.createElement('fixture-composer', {},
-      props.children, props.actions?.({ pickFiles() {} }))));
+      props.children, React.createElement(Editor, { ...props, children: undefined }))));
   }
   return composerComponents.get(frontend)!;
 }
@@ -330,14 +363,25 @@ function composerComponent(frontend: ModuleFrontend) {
   }
   return composerFixtures.get(frontend);
 }
-function selectionCallback(frontend: ModuleFrontend, props: ComposerProps) {
-  const Enhanced = enhanceComposer(frontend) as (props: ComposerProps) => unknown;
+function editorHandlers(frontend: ModuleFrontend, props: ComposerEditorProps) {
+  const Enhanced = enhanceEditor(frontend) as (props: ComposerEditorProps) => unknown;
   const element = Enhanced(props) as Element;
-  return element.props.onFiles as NonNullable<ComposerProps['onFiles']>;
+  return element.props as unknown as ComposerEditorProps;
 }
-function selectFiles(frontend: ModuleFrontend, target: ComposerTarget, files: readonly File[], source: ComposerFileSelection['source'] = 'paste') {
+function fileEvent(files: readonly File[], data: Record<string, string> = {}) {
+  const transfer = { files, items: [], types: files.length ? ['Files', ...Object.keys(data)] : Object.keys(data),
+    dropEffect: 'none', getData: (type: string) => data[type] || '' };
+  return {
+    nativeEvent: {}, defaultPrevented: false,
+    preventDefault(this: { defaultPrevented: boolean }) { this.defaultPrevented = true; },
+    clipboardData: transfer, dataTransfer: transfer,
+  } as unknown as ClipboardEvent<HTMLDivElement> & DragEvent<HTMLDivElement>;
+}
+function selectFiles(frontend: ModuleFrontend, target: ComposerTarget, files: readonly File[]) {
   const props = composerProps(frontend, target);
-  return selectionCallback(frontend, props)({ id: crypto.randomUUID(), source, files, target: props });
+  const event = fileEvent(files);
+  editorHandlers(frontend, props).onPaste?.(event);
+  return event.defaultPrevented;
 }
 
 test('activation registers scoped concrete services and only v2 component and Markdown boundaries', async () => {
@@ -346,21 +390,22 @@ test('activation registers scoped concrete services and only v2 component and Ma
   assert.equal(frontend.apiVersion, 2);
   assert.equal(frontend.writes, undefined);
   assert.deepEqual(h.schemas.map(schema => ({ id: schema.id, purposes: schema.purposes })), [{ id: 'attachments', purposes: ['prompt'] }]);
-  assert.deepEqual(frontend.components!.map(item => item.boundary), ['composer', 'attachment']);
+  assert.deepEqual(frontend.components!.map(item => item.boundary), ['composer', 'composerEditor', 'attachment']);
   assert.equal(frontend.markdown!.length, 1);
   assert.deepEqual(Object.keys(frontend).sort(), ['apiVersion', 'components', 'dispose', 'markdown']);
   const ids = [...h.schemas, ...h.services, ...frontend.components!, ...frontend.markdown!].map(item => item.id);
   assert.equal(new Set(ids).size, ids.length, 'state, component and Markdown IDs are unique in one module');
-  assert.deepEqual(h.services.map(item => item.id), ['file-drafts', 'view-resources', 'uploads', 'file-probes']);
+  assert.deepEqual(h.services.map(item => item.id), ['file-drafts', 'view-resources', 'uploads', 'file-probes', 'file-inputs']);
   assert.equal(h.services[2]!.service.constructor.name, 'UploadStore');
   assert.equal(h.services[3]!.service.constructor.name, 'FileProbes');
+  assert.equal(h.services[4]!.service.constructor.name, 'FileInputs');
   assert.equal(h.calls.length, 0, 'registration does not fetch or capture files');
   assert.doesNotMatch(compiled, /(?:from\s*['"]react|react\/jsx-runtime|createRoot|innerHTML|sessionStore|sessionStorage|cf-pending)/);
   h.signal.abort();
-  assert.deepEqual(h.disposedServices, ['file-probes', 'uploads', 'view-resources', 'file-drafts']);
+  assert.deepEqual(h.disposedServices, ['file-inputs', 'file-probes', 'uploads', 'view-resources', 'file-drafts']);
   assert.equal(h.hostListeners.size, 0);
   frontend.dispose?.();
-  assert.equal(h.disposedServices.length, 4, 'host cleanup invokes each scoped disposer once');
+  assert.equal(h.disposedServices.length, 5, 'host cleanup invokes each scoped disposer once');
 });
 
 test('activation explicitly rejects missing or unsupported public UI and portal capability', async () => {
@@ -381,7 +426,7 @@ test('activation explicitly rejects missing or unsupported public UI and portal 
   } as unknown as ModuleFrontendContext), /state\.registerDraft/);
 });
 
-test('composer middleware returns Base directly and composes inherited content, actions and editor behavior', async () => {
+test('composer middleware only appends the entire list and preserves existing editor behavior', async () => {
   const h = harness();
   const frontend = await activate(h.context);
   const draft = new Draft();
@@ -390,14 +435,10 @@ test('composer middleware returns Base directly and composes inherited content, 
   const Base = (_props: ComposerProps) => null;
   const Enhanced = middleware.wrap(Base) as (props: ComposerProps) => unknown;
   const notice = React.createElement('p', { id: 'core-notice' }, 'core context');
-  const action = React.createElement('button', { id: 'other-module-action' }, 'inherited');
-  const interactions: ComposerInteractions = { pickFiles() {} };
-  let inheritedInteractions: ComposerInteractions | undefined;
   const props: ComposerProps = {
     ...composerProps(frontend, { draft: draft.reference, operation: 'prompt', disabled: false }),
     busy: true, sendBlocked: true, placeholder: 'native placeholder', submitLabel: 'native send',
     children: notice,
-    actions: value => { inheritedInteractions = value; return action; },
   };
   const enhanced = Enhanced(props) as Element;
   assert.equal(enhanced.type, Base, 'the HOC introduces no span/div/placeholder');
@@ -408,13 +449,50 @@ test('composer middleware returns Base directly and composes inherited content, 
   assert.equal(content.type, React.Fragment, 'composition uses a DOM-free fragment');
   assert.equal((content.props.children as unknown[])[0], notice);
   assert.equal('attachments' in enhanced.props, false);
-  const actions = (enhanced.props.actions as (value: ComposerInteractions) => ReactNode)(interactions) as unknown as Element;
-  assert.equal(actions.type, React.Fragment);
-  assert.equal((actions.props.children as unknown[])[0], action);
-  assert.equal(inheritedInteractions, interactions);
-  assert.doesNotMatch(source, /onPaste|onDrop|onKeyDown|onComposition|type="file"|stopPropagation/,
-    'the module does not own clipboard text, IME, native keyboard handling or a second picker');
+  assert.deepEqual(Object.keys(enhanced.props).sort(), Object.keys(props).sort(), 'only existing composer content is extended');
+  assert.doesNotMatch(source, /onFiles|pickFiles|ComposerInteractions|onKeyDown=|onComposition|stopPropagation/,
+    'there is no host file channel or replacement for native keyboard/IME handling');
   frontend.dispose?.();
+});
+
+test('editor middleware extends the actual input row without wrapping its button, textarea or submit control', async () => {
+  const h = harness();
+  const frontend = await activate(h.context);
+  const draft = new Draft();
+  const React = h.context.react;
+  const middleware = frontend.components!.find(item => item.boundary === 'composerEditor')!;
+  const Base = (_props: ComposerEditorProps) => null;
+  const Enhanced = middleware.wrap(Base) as (props: ComposerEditorProps) => unknown;
+  const action = React.createElement('button', { id: 'inherited-action' }, 'inherited');
+  const props: ComposerEditorProps = {
+    ...composerProps(frontend, { draft, operation: 'prompt', disabled: false }),
+    children: action, editorRef: { current: null }, placeholder: 'native placeholder', submitLabel: 'native submit',
+    onKeyDown() {}, onCompositionStart() {}, onCompositionEnd() {}, title: 'original row',
+  };
+  const enhanced = Enhanced(props) as Element;
+  assert.equal(enhanced.type, Base);
+  for (const key of ['draft', 'onTextChange', 'onSubmit', 'onKeyDown', 'onCompositionStart', 'onCompositionEnd',
+    'editorRef', 'placeholder', 'submitLabel', 'title']) {
+    assert.equal(enhanced.props[key], props[key as keyof ComposerEditorProps], key);
+  }
+  const tree = h.render(enhanceEditor(frontend), props);
+  assert.equal(tree.type, 'div');
+  assert.equal(tree.props.className, 'chat-input');
+  assert.equal(tree.props.title, props.title);
+  assert.equal(tree.props.onKeyDown, props.onKeyDown);
+  const children = descendants(tree).filter(element => element.type !== 'svg' && element.type !== 'path');
+  const actionIndex = children.findIndex(element => element.props.id === 'inherited-action');
+  const uploadIndex = children.findIndex(element => element.props['aria-label'] === '添加文件');
+  const textareaIndex = children.findIndex(element => element.type === 'textarea');
+  assert.ok(actionIndex < uploadIndex && uploadIndex < textareaIndex);
+  assert.equal(children.filter(element => element.type === 'div').length, 1, 'no second editor wrapper');
+  assert.equal(children.some(element => element.type === 'span' || element.type === 'input'), false);
+  const textarea = children[textareaIndex]!;
+  assert.equal(textarea.props.ref, props.editorRef);
+  assert.equal(textarea.props.placeholder, props.placeholder);
+  const submit = children.find(element => element.props['aria-label'] === 'native send')!;
+  assert.equal(submit.props.onClick, props.onSubmit);
+  h.unmount(); frontend.dispose?.();
 });
 
 test('the entire ready and pending list uses one original section/list immediately before the editor', async () => {
@@ -425,8 +503,9 @@ test('the entire ready and pending list uses one original section/list immediate
   selectFiles(frontend, { draft, operation: 'prompt', disabled: false }, [new File(['pending'], 'Pending')]);
   const React = h.context.react;
   const middleware = frontend.components!.find(item => item.boundary === 'composer')!;
+  const Editor = enhanceEditor(frontend);
   const Composer = middleware.wrap(props => React.createElement('fixture-composer', {}, props.children,
-    React.createElement('textarea', { 'aria-label': 'native editor' })));
+    React.createElement(Editor, { ...props, children: undefined })));
   const props = { ...composerProps(frontend, { draft, operation: 'prompt', disabled: false }),
     children: React.createElement('p', { id: 'existing-context' }, 'Existing context') };
   const tree = h.render(Composer, props);
@@ -463,16 +542,19 @@ test('fresh decision drafts hide prompt files while captured uploads settle only
   const frontend = await activate(h.context);
   const prompt = new Draft('shared-session');
   const promptProps = composerProps(frontend, { draft: prompt.reference, operation: 'prompt', disabled: false });
-  const captured = selectionCallback(frontend, promptProps);
+  const promptTree = h.render(enhanceComposer(frontend), promptProps);
+  click(descendants(promptTree).find(element => element.props['aria-label'] === '添加文件')!);
+  const picker = nativeInputs.at(-1)!;
   prompt.editText('Cached prompt text');
   const ask = new Draft(prompt.sessionId, { kind: 'ask', requestId: 'question-1' });
   ask.editText('Separate answer');
   const askProps = composerProps(frontend, { draft: ask.reference, operation: 'ask', disabled: false });
   const before = h.render(enhanceComposer(frontend), askProps);
   assert.equal(descendants(before).some(element => element.props.className === 'cf-attachments' || element.props['aria-label'] === '添加文件'), false);
-  assert.equal(selectionCallback(frontend, askProps), undefined);
+  assert.equal(editorHandlers(frontend, askProps).onPaste, undefined);
   assert.equal(fileScopes.has(ask.reference), false);
-  assert.equal(captured({ id: 'captured-prompt-selection', files: [new File(['file'], 'prompt.txt')], source: 'picker', target: promptProps }), true);
+  picker.files = [new File(['file'], 'prompt.txt')];
+  picker.dispatchEvent(new Event('change'));
   assert.equal(prompt.blocks, 1);
   assert.equal(ask.blocks, 0);
   finish(Response.json({ fileId, attachment: { type: 'file', path: `/data/files/${fileId}/ready/body.txt`, displayName: 'Prompt upload' } }));
@@ -524,38 +606,78 @@ test('ready row removal updates its schema and discards only this activation’s
   h.unmount(); frontend.dispose?.();
 });
 
-test('one synchronous file handoff owns all selected files or delegates without duplicate consumption', async () => {
-  for (const source of ['picker', 'paste', 'drop'] as const) {
-    const h = harness();
-    const frontend = await activate(h.context);
-    const draft = new Draft();
-    draft.editText('Mixed clipboard text stays in the native editor');
-    let inherited = 0;
-    const props: ComposerProps = {
-      ...composerProps(frontend, { draft: draft.reference, operation: 'prompt', disabled: false }),
-      onFiles: () => { inherited++; return true; },
-    };
-    const callback = selectionCallback(frontend, props);
-    const files = [new File(['first'], 'first.txt'), new File(['second'], 'second.txt')];
-    const selection: ComposerFileSelection = { id: `${source}-selection`, target: props, source, files };
-    const result = callback(selection);
-    assert.equal(result, true, 'ownership is acknowledged synchronously, not as an upload promise');
-    assert.equal(inherited, 0, 'handled selections never also call inherited onFiles');
-    assert.equal(draft.blocks, 1);
-    assert.equal(h.calls.length, 2);
-    assert.equal(h.calls[0]!.init!.body, files[0]);
-    assert.equal(h.calls[1]!.init!.body, files[1]);
-    assert.equal(draft.snapshot.text, 'Mixed clipboard text stays in the native editor');
-    assert.equal(callback({ ...selection, id: 'empty', files: [] }), true);
-    assert.equal(inherited, 1, 'a declined empty selection invokes the inherited callback once');
-    draft.snapshot = { ...draft.snapshot, pending: true };
-    assert.equal(callback({ ...selection, id: 'late' }), false, 'a pending rejection stays in module-owned error state');
-    const rejected = h.render(composerComponent(frontend), props);
-    assert.match(JSON.stringify(rejected), /消息正在提交/);
-    assert.equal(inherited, 1, 'an attempted handoff does not dispatch the selection again');
-    assert.equal(h.calls.length, 2);
-    frontend.dispose?.();
+test('editor paste and drop compose inherited handlers and consume files once while mixed text remains native', async () => {
+  for (const source of ['onPaste', 'onDrop'] as const) {
+    for (const mixed of [false, true]) {
+      const h = harness();
+      const frontend = await activate(h.context);
+      const draft = new Draft();
+      draft.editText('Mixed clipboard text stays in the native editor');
+      let inherited = 0;
+      const props: ComposerEditorProps = {
+        ...composerProps(frontend, { draft: draft.reference, operation: 'prompt', disabled: false }),
+        [source]: () => { inherited++; },
+      };
+      const middleware = frontend.components!.find(item => item.boundary === 'composerEditor')!;
+      const Enhanced = middleware.wrap(enhanceEditor(frontend));
+      const row = h.render(Enhanced, props);
+      const callback = row.props[source] as (event: ReturnType<typeof fileEvent>) => void;
+      const files = [new File(['first'], 'first.txt'), new File(['second'], 'second.txt')];
+      const event = fileEvent(files, mixed ? { 'text/plain': 'native clipboard text' } : {});
+      callback(event);
+      assert.equal(event.defaultPrevented, source === 'onDrop' || !mixed);
+      assert.equal(inherited, 1);
+      assert.equal(draft.blocks, 1);
+      assert.equal(h.calls.length, 2);
+      assert.equal(h.calls[0]!.init!.body, files[0]);
+      assert.equal(h.calls[1]!.init!.body, files[1]);
+      assert.equal(draft.snapshot.text, 'Mixed clipboard text stays in the native editor');
+      const empty = fileEvent([], { 'text/plain': 'ordinary text' });
+      callback(empty);
+      assert.equal(empty.defaultPrevented, false);
+      assert.equal(inherited, 2, 'ordinary text invokes inherited DOM behavior once');
+      draft.snapshot = { ...draft.snapshot, pending: true };
+      callback(fileEvent(files));
+      assert.equal(inherited, 3);
+      assert.equal(h.calls.length, 2);
+      h.unmount(); frontend.dispose?.();
+    }
   }
+});
+
+test('inherited editor cancellation wins, callback failures are reported, and disabled file drops never upload', async () => {
+  const h = harness();
+  const frontend = await activate(h.context);
+  const draft = new Draft();
+  const props = composerProps(frontend, { draft, operation: 'prompt', disabled: false });
+  for (const name of ['onPaste', 'onDrop', 'onDragOver'] as const) {
+    let inherited = 0;
+    const handler = editorHandlers(frontend, {
+      ...props, [name]: (event: ReturnType<typeof fileEvent>) => { inherited++; event.preventDefault(); },
+    })[name]!;
+    const event = fileEvent([new File(['a'], 'a')]);
+    handler(event);
+    assert.equal(inherited, 1);
+    assert.equal(event.dataTransfer.dropEffect, 'none');
+    assert.equal(h.calls.length, 0);
+    const failure = new Error(`${name} fixture failure`);
+    const broken = editorHandlers(frontend, { ...props, [name]: () => { throw failure; } })[name]!;
+    assert.doesNotThrow(() => broken(fileEvent([new File(['a'], 'a')])));
+    assert.equal(h.errors.at(-1), failure);
+  }
+  for (const disabled of [true, false]) {
+    draft.snapshot = { ...draft.snapshot, pending: !disabled };
+    const handlers = editorHandlers(frontend, { ...props, disabled });
+    const drag = fileEvent([new File(['a'], 'a')]);
+    handlers.onDragOver!(drag);
+    assert.equal(drag.defaultPrevented, true);
+    assert.equal(drag.dataTransfer.dropEffect, 'none');
+    handlers.onDrop!(fileEvent([new File(['a'], 'a')]));
+    handlers.onPaste!(fileEvent([new File(['a'], 'a')]));
+  }
+  assert.equal(h.calls.length, 0);
+  assert.equal(draft.blocks, 0);
+  frontend.dispose?.();
 });
 
 test('file probes follow readonly host visibility and module resources do not cross activations', async () => {
@@ -566,6 +688,7 @@ test('file probes follow readonly host visibility and module resources do not cr
   const second = await activate(b.context);
   assert.notEqual(a.services[2]!.service, b.services[2]!.service);
   assert.notEqual(a.services[3]!.service, b.services[3]!.service);
+  assert.notEqual(a.services[4]!.service, b.services[4]!.service);
   const node: MarkdownNode = {
     kind: 'link', target: './test.txt', label: 'Test',
     origin: { sessionId: 'fixture', messageId: 'visibility' },
@@ -745,24 +868,27 @@ test('Markdown matches only local references and keeps original target, label an
   frontend.dispose?.();
 });
 
-test('the upload control delegates to the host picker and its captured callback retains the original readonly draft', async () => {
+test('the module picker opens synchronously and retains its canonical draft across unmount and session switches', async () => {
   const h = harness();
   const frontend = await activate(h.context) as ModuleFrontend;
   const original = new Draft('original');
   const next = new Draft('next');
   const props = composerProps(frontend, { draft: original.reference, disabled: false, operation: 'prompt' });
-  let captured: ComposerProps['onFiles'];
-  const middleware = frontend.components!.find(item => item.boundary === 'composer')!;
-  const Enhanced = middleware.wrap(base => h.context.react.createElement(h.context.react.Fragment, null,
-    base.actions?.({ pickFiles() { clicked++; captured = base.onFiles; } })));
-  let clicked = 0;
-  const first = h.render(Enhanced, props);
+  const first = h.render(enhanceComposer(frontend), props);
+  const previous = nativeInputs.length;
   click(descendants(first).find(element => element.props['aria-label'] === '添加文件')!);
-  assert.equal(clicked, 1, 'the picker opens in the button click stack');
-  assert.equal(descendants(first).some(element => element.type === 'input'), false, 'the module adds no hidden picker');
-  h.render(Enhanced, { ...props, draft: next.reference });
+  const picker = nativeInputs.at(-1)!;
+  assert.equal(nativeInputs.length, previous + 1);
+  assert.equal(picker.clicks, 1, 'the picker opens in the button click stack');
+  assert.equal(picker.type, 'file');
+  assert.equal(picker.multiple, true);
+  assert.equal(descendants(first).some(element => element.type === 'input'), false, 'the input is detached, not a hidden host slot');
+  h.unmount();
+  h.setHost({ sessionId: next.sessionId });
+  h.render(enhanceComposer(frontend), { ...props, draft: next.reference });
   const file = new File(['content'], 'a.txt');
-  assert.equal(captured!({ id: 'captured-picker', files: [file], source: 'picker', target: props }), true);
+  picker.files = [file];
+  picker.dispatchEvent(new Event('change'));
   assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0]!.init!.body, file);
   assert.equal(original.blocks, 1);
@@ -823,7 +949,8 @@ test('attachment action is an accessible borderless icon, not a boxed label', as
   assert.equal(descendants(button).some(element => element.type === 'span'), false);
   const ask = new Draft(draft.sessionId, { kind: 'ask', requestId: 'question' });
   const answer = h.render(composerComponent(frontend), { draft: ask, operation: 'ask', disabled: false });
-  assert.equal(descendants(answer).some(element => element.type === 'button'), false);
+  assert.equal(descendants(answer).some(element => element.props['aria-label'] === '添加文件'), false);
+  assert.equal(descendants(answer).some(element => element.props['aria-label'] === 'native send'), true);
   frontend.dispose?.();
 });
 
@@ -935,7 +1062,7 @@ test('send pending disables upload, picker, ready removal, pending removal and r
   for (const element of render().filter(element => element.type === 'button' && /添加文件|移除|重新上传/.test(String(element.props['aria-label'])))) {
     assert.equal(!!element.props.disabled, false);
   }
-  assert.equal(unlocked.some(element => element.type === 'input'), false, 'only the host owns its picker');
+  assert.equal(unlocked.some(element => element.type === 'input'), false, 'the module-owned picker is detached from the editor');
   h.unmount();
   frontend.dispose?.();
 });
@@ -945,12 +1072,14 @@ test('a file picker opened before sending cannot upload its late selection durin
   const frontend = await activate(h.context);
   const draft = new Draft();
   const composer = composerProps(frontend, { draft, operation: 'prompt', disabled: false });
-  const captured = selectionCallback(frontend, composer);
+  const tree = h.render(enhanceComposer(frontend), composer);
+  click(descendants(tree).find(element => element.props['aria-label'] === '添加文件')!);
+  const picker = nativeInputs.at(-1)!;
   draft.snapshot = { ...draft.snapshot, pending: true };
-  assert.equal(captured({ id: 'late-picker', files: [new File(['late'], 'late.txt')], source: 'picker', target: composer }), false);
+  picker.files = [new File(['late'], 'late.txt')];
+  picker.dispatchEvent(new Event('change'));
   assert.equal(h.calls.length, 0);
   assert.equal(draft.blocks, 0);
-  assert.match(String(h.errors[0]), /正在提交/);
   h.unmount();
   frontend.dispose?.();
 });
