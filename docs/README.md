@@ -1,6 +1,6 @@
 # Cockpit File 文档
 
-**当前源码：cockpit-file 0.1.4，配合固定 Cockpit 0.2.0 / Module API v1。**
+**本次发行源码：cockpit-file 0.1.5，配合 Cockpit v0.2.0 / Module API v1 / Module UI v1。**
 本地构建、可信包安装、聊天上传和流式文件卡片已实现；发行包见 GitHub Releases。
 远程安装、全局文件库和旧历史补抓不在当前实现中。
 先看[构建与安装](installation.md)，再按主题了解当前契约。
@@ -78,7 +78,7 @@ Agent 用原生工具生成文件，正常回复 Markdown
 
 | 文档 | 唯一负责的主题 |
 | --- | --- |
-| [本地构建与安装](installation.md) | 实际构建、模块包、启用、配置、停用与未发布状态 |
+| [本地构建与安装](installation.md) | 实际构建、模块包、启用、配置、停用与发行兼容 |
 | [前端接入契约](frontend-contract.md) | 页面/组件插口、输入事件、草稿字段、发送阻止、渲染与共享 UI |
 | [首版后端设计](backend-design.md) | 本体后端插口、文件模块业务、最小 HTTP 能力和原生事件接线 |
 | [文件引用与地址](file-references.md) | 原生附件、助手 Markdown、消息身份、path/URL 映射和文件版本 |
@@ -93,10 +93,11 @@ Agent 用原生工具生成文件，正常回复 Markdown
 
 ## 5. 当前源码依据
 
-宿主参考基线是
-[`waksana/cockpit@97f8e75`](https://github.com/waksana/cockpit/tree/97f8e75c65fbf18b9e3c85ca562c46d8db6f1990)，
+当前构建的不可变宿主 SDK 基线是
+[`waksana/cockpit@79e2946`](https://github.com/waksana/cockpit/tree/79e2946bab382ff68e3cf2a84d42827f011cbe53)，
 SDK 1.0.13、bundled runtime 1.0.83 / protocol 3。
-该基线原生附件发送和 SDK 通知已存在；本次实现同时扩展宿主为 0.2.0 并加入文件模块。
+该提交已合入宿主 PR #19，包含原生附件、SDK 通知、公共 UI v1 和 portal，
+与 Cockpit v0.2.0 的模块 API/公共样式一致；详细 pin 见 `tooling/host-sdk.json`。
 详细代码接点写在前后端主题文档中；这里不以旧文件系统或旧 CI 作为本次实现完成证据。
 
 相关宿主文档：

@@ -19,17 +19,18 @@ Agent 可以照常使用 Markdown 引用文件，不需要学习额外的发送�
 
 ## 当前状态
 
-**当前版本为 0.1.4。**
-需要支持 Module API v1 的 Cockpit 0.2.0；已发布的 Cockpit v0.1.0 不支持此模块。
+**本次发行版本为 0.1.5**；可下载资产以该版本 Release workflow 成功发布为准。
+需要 Cockpit v0.2.0 的 Module API v1 / Module UI v1；Cockpit v0.1.0 不支持此模块。
 需要已合入的 [waksana/cockpit#7](https://github.com/waksana/cockpit/pull/7) 输入区配套调整；
 准确的构建基线见[安装指南](docs/installation.md)。
-本分支的未发布 UI 配套变更还要求宿主显式提供 `context.uiVersion: 1` 和
+0.1.5 的共享 UI 还要求宿主显式提供 `context.uiVersion: 1` 和
 `context.createPortal`；缺少能力时模块拒绝激活，不在旧宿主静默显示无样式控件。
 公共样式、图标和兼容规则以宿主
 [模块 UI 开发指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md) 为唯一权威。
 不可变 SDK 基线已固定为包含这些能力及管理页回读、原生弹窗键盘归属修复的宿主提交 `79e2946b`；
-交付顺序为先交付并升级配套宿主，再发布并升级模块；
-当前修改不代表已发布、安装或部署。
+该提交已通过宿主 PR #19 合入，API/公共样式与 v0.2.0 发行源码一致。
+发行顺序为先发布宿主，再发布模块；安装时也先升级宿主，后启用模块并冷启动。
+合并源码或发布资产不代表已安装或部署；旧版 0.1.4 使用其 tag 的文档。
 0.1.3 的原生产物目录接入需要已合入的 [waksana/cockpit#15](https://github.com/waksana/cockpit/pull/15)；
 不提示 Agent 修改输出，也不由模块猜测 Copilot 数据根。
 
