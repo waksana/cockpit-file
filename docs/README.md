@@ -1,6 +1,6 @@
 # Cockpit File 文档
 
-**本次发行源码：cockpit-file 0.1.5，配合 Cockpit v0.2.0 / Module API v1 / Module UI v1。**
+**当前开发源码：cockpit-file 0.1.6（尚未发布），配合 Cockpit v0.2.0 / Module API v1 / Module UI v1。**
 本地构建、可信包安装、聊天上传和流式文件卡片已实现；发行包见 GitHub Releases。
 远程安装、全局文件库和旧历史补抓不在当前实现中。
 先看[构建与安装](installation.md)，再按主题了解当前契约。
@@ -56,7 +56,7 @@ Agent 用原生工具生成文件，正常回复 Markdown
 | 版本 | 同消息同引用首次成功快照固定；新消息引用同路径重新捕获 |
 | 去重 | 同上传操作/同消息引用的幂等必须保留；首版不做跨文件内容哈希去重 |
 | 摘要 | SHA-256 可随保存流计算作完整性信息，不用来合并不同文件记录 |
-| 卡片等待 | 每次自动 loading 总预算最多五秒；重绘/delta/自动重试不重置期限 |
+| 展示与等待 | 来源决定附件行/行内引用；HEAD 检查与用户显式打开的媒体预览分别有五秒预算，细节见[前端契约](frontend-contract.md) |
 | 渲染协议 | 原生消息和共享 URL 算法即可，不增加宿主展示资源图或卡片 SSE |
 | 生命周期 | 模块业务不阻止 graceful；正常处理时持久化，不依赖退出回调兜底保存 |
 | 来源范围 | 按用户确认，允许捕获服务用户可读的本地普通文件；HTTP 读取不能据任意路径创建捕获 |
@@ -116,7 +116,7 @@ SDK 1.0.13、bundled runtime 1.0.83 / protocol 3。
 | 引用 | 行内 Markdown link/image；相对路径、绝对路径、本地 file URL；未知 cwd 的相对引用失败 |
 | 限制 | 有界扫描/引用数/工作队列/上传大小；数值和配置入口见安装文档 |
 | 预览 | 按字节识别的图片/视频/音频；SVG 使用受限图片模式，HTML/PDF 不内嵌 |
-| 读取 | HEAD 有界探测，202/404 在总五秒内重试；其他明确错误提前失败，ready 后读原 URL |
+| 读取 | HEAD 有界探测，202/404 在总五秒内重试；ready 后不自动下载媒体，点击预览才读取原 URL |
 | 存储 | files/<id>/ready/body[.extension] 与 JSON；URL 保留 body 文件名，实现纯函数互逆 |
 | 平台 | Node 24.20.0，Linux；依赖 /proc/self/fd 固定读取句柄，没有不安全的其他平台 fallback |
 | Markdown 边界 | 流式 best effort，不是完整 CommonMark；引用式定义等复杂形式目前不自动捕获 |

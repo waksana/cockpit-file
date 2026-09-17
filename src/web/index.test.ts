@@ -87,6 +87,11 @@ function harness() {
       if (!ref.current || !ref.current.deps.every((value, at) => Object.is(value, deps[at]))) ref.current = { callback, deps };
       return ref.current.callback;
     },
+    useMemo<T>(factory: () => T, deps: readonly unknown[]) {
+      const ref = react.useRef(undefined) as { current: { value: T; deps: readonly unknown[] } | undefined };
+      if (!ref.current || !ref.current.deps.every((value, at) => Object.is(value, deps[at]))) ref.current = { value: factory(), deps };
+      return ref.current.value;
+    },
     useSyncExternalStore(subscribe: (listener: () => void) => () => void, snapshot: () => unknown) {
       react.useEffect(() => subscribe(() => {}), [subscribe]);
       return snapshot();
@@ -110,6 +115,9 @@ function harness() {
         previous?.cleanup?.();
         if (effects[index] === entry) entry.cleanup = effect() || undefined;
       });
+    },
+    useLayoutEffect(effect: () => void | (() => void), deps: readonly unknown[]) {
+      react.useEffect(effect, deps);
     },
   };
   const context: ModuleFrontendContext = {
@@ -198,7 +206,8 @@ test('only selected pinned Lucide SVG data is shipped with complete upstream lic
   const upstream = JSON.parse(await readFile(new URL('../../node_modules/lucide-static/icon-nodes.json', import.meta.url), 'utf8'));
   const metadata = JSON.parse(await readFile(new URL('../../node_modules/lucide-static/package.json', import.meta.url), 'utf8'));
   assert.equal(metadata.version, '1.46.0');
-  assert.deepEqual(Object.keys(icons).sort(), ['download', 'file', 'paperclip', 'play', 'rotate-cw', 'x']);
+  assert.deepEqual(Object.keys(icons).sort(), ['arrow-up-right', 'circle-alert', 'download', 'file', 'file-code',
+    'image', 'loader-circle', 'paperclip', 'play', 'rotate-cw', 'x']);
   for (const [name, nodes] of Object.entries(icons)) assert.deepEqual(nodes, upstream[name], name);
   const license = await readFile(new URL('../../node_modules/lucide-static/LICENSE', import.meta.url), 'utf8');
   assert.match(license, /ISC License/);
@@ -213,6 +222,18 @@ function descendants(value: unknown): Element[] {
   if (!value || typeof value !== 'object' || !('type' in value) || !('props' in value)) return [];
   const element = value as Element;
   return [element, ...descendants(element.props.children)];
+}
+
+function click(element: Element, modifiers: Record<string, unknown> = {}) {
+  let prevented = false;
+  (element.props.onClick as (event: unknown) => void)({
+    button: 0, defaultPrevented: false, ...modifiers, preventDefault() { prevented = true; },
+  });
+  return prevented;
+}
+
+function openFile(tree: Element) {
+  click(descendants(tree).find(element => element.props['aria-haspopup'] === 'dialog')!);
 }
 
 test('native blob cards decode locally, reuse their URL on rerender and revoke it on change or teardown', async () => {
@@ -278,7 +299,7 @@ test('omitted and malformed blobs show unavailable cards without download or fab
   }
 });
 
-test('blob preview waiting is bounded across rerenders and stale media events cannot finish a retry', async t => {
+test('media loads only on opening, with a fresh bounded attempt and isolated late callbacks', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100 });
   const h = harness();
   const frontend = await activate(h.context);
@@ -289,6 +310,12 @@ test('blob preview waiting is bounded across rerenders and stale media events ca
       data: syntheticPng },
   };
   const render = () => h.render(renderNode, { node });
+  render(); h.flushEffects();
+  assert.equal(render().props['aria-busy'], false);
+  assert.equal(descendants(render()).some(element => element.type === 'img'), false);
+  t.mock.timers.tick(10_000);
+  assert.doesNotMatch(JSON.stringify(render()), /预览加载超时/);
+  openFile(render());
   render(); h.flushEffects();
   const first = render();
   const firstImage = descendants(first).find(element => element.type === 'img')!;
@@ -306,7 +333,8 @@ test('blob preview waiting is bounded across rerenders and stale media events ca
   const retrying = render();
   assert.equal(retrying.props['aria-busy'], true, 'old image cannot complete the new resource');
   const nextImage = descendants(retrying).find(element => element.type === 'img')!;
-  assert.notEqual(nextImage.props.src, firstImage.props.src);
+  assert.equal(nextImage.props.src, firstImage.props.src, 'retry reuses available bytes, not another decode/upload');
+  assert.notEqual(nextImage.props.key, firstImage.props.key);
   (nextImage.props.onLoad as () => void)();
   assert.equal(render().props['aria-busy'], false);
   h.unmount();
@@ -430,7 +458,7 @@ test('attachment action is an accessible borderless icon, not a boxed label', as
   frontend.dispose?.();
 });
 
-test('each selection has its own thumbnail, honest progress, inline failure and remove/retry actions', async () => {
+test('each selection has its own row and preview resource, honest progress and independent remove/retry', async () => {
   const h = harness();
   const responses: ((response: Response) => void)[] = [];
   h.context.request = (path, init) => {
@@ -445,13 +473,20 @@ test('each selection has its own thumbnail, honest progress, inline failure and 
   const render = () => h.render(frontend.composerAbove![0]!.component, composer);
   render(); h.flushEffects();
   let tree = render();
-  let images = descendants(tree).filter(element => element.type === 'img');
-  assert.equal(images.length, 2);
-  assert.notEqual(images[0]!.props.src, images[1]!.props.src);
-  const originalUrls = images.map(image => String(image.props.src));
+  assert.equal(descendants(tree).filter(element => element.type === 'img').length, 0);
+  const originalUrls: string[] = [];
+  for (const row of descendants(tree).filter(element => element.props.className === 'cf-row')) {
+    openFile(row);
+    tree = render(); h.flushEffects();
+    const image = descendants(tree).find(element => element.type === 'img')!;
+    originalUrls.push(String(image.props.src));
+    (image.props.onLoad as () => void)();
+    (descendants(tree).find(element => element.type === 'dialog')!.props.onClose as () => void)();
+    tree = render(); h.flushEffects();
+  }
+  assert.notEqual(originalUrls[0], originalUrls[1]);
   assert.equal((await (await fetch(originalUrls[0]!)).blob()).size, file.size);
-  for (const image of images) (image.props.onLoad as () => void)();
-  const cards = descendants(tree).filter(element => element.props.className === 'cf-card');
+  const cards = descendants(tree).filter(element => element.props.className === 'cf-row');
   assert.equal(cards.length, 2);
   assert.ok(cards.every(card => card.props['aria-busy'] === true));
   const progress = descendants(tree).filter(element => element.type === 'progress');
@@ -493,12 +528,16 @@ test('each selection has its own thumbnail, honest progress, inline failure and 
   responses[4]!(new Response(null, { headers: { 'content-type': 'image/png', 'content-length': `${file.size}` } }));
   await settle();
   tree = render();
-  images = descendants(tree).filter(element => element.type === 'img');
+  assert.equal(descendants(tree).some(element => element.type === 'img'), false);
+  openFile(tree);
+  tree = render(); h.flushEffects();
+  const images = descendants(tree).filter(element => element.type === 'img');
   assert.equal(images.length, 1);
   assert.equal(images[0]!.props.src, `${apiBase}/files/${fileId}/body.png`);
   (images[0]!.props.onLoad as () => void)();
+  (descendants(tree).find(element => element.type === 'dialog')!.props.onClose as () => void)();
   tree = render();
-  assert.equal(descendants(tree).filter(element => element.props.className === 'cf-card').length, 1);
+  assert.equal(descendants(tree).filter(element => element.props.className === 'cf-row').length, 1);
   assert.equal(descendants(tree).some(element => element.type === 'progress'), false);
   assert.equal(descendants(tree).some(element => element.type === 'a'), false, 'draft actions are not duplicate chat downloads');
   h.unmount();
@@ -553,7 +592,7 @@ test('a file picker opened before sending cannot upload its late selection durin
   h.unmount();
   frontend.dispose?.();
 });
-test('selection thumbnail URLs release on view unmount and module stop without cancelling a switched-away draft', async () => {
+test('selection preview URLs release on view unmount and module stop without cancelling a switched-away draft', async () => {
   const h = harness();
   const frontend = await activate(h.context);
   const draft = new Draft();
@@ -561,12 +600,14 @@ test('selection thumbnail URLs release on view unmount and module stop without c
   frontend.fileInput![0]!.receive([new File([Buffer.from(syntheticPng, 'base64')], 'pixel.png', { type: 'image/png' })], composer);
   const render = () => h.render(frontend.composerAbove![0]!.component, composer);
   render(); h.flushEffects();
+  openFile(render()); render(); h.flushEffects();
   const first = String(descendants(render()).find(element => element.type === 'img')!.props.src);
   h.unmount();
   await assert.rejects(fetch(first));
   assert.equal(draft.blocks, 1);
   assert.equal(h.calls[0]!.init!.signal!.aborted, false);
   render(); h.flushEffects();
+  openFile(render()); render(); h.flushEffects();
   const second = String(descendants(render()).find(element => element.type === 'img')!.props.src);
   assert.notEqual(second, first);
   h.signal.abort();
@@ -577,7 +618,7 @@ test('selection thumbnail URLs release on view unmount and module stop without c
   h.unmount();
 });
 
-test('restored draft images and chat use the same compact skeleton and canonical URL, never a managed-file Blob', async () => {
+test('draft and native attachments share rows and canonical URLs without background media downloads', async () => {
   const h = harness();
   h.context.request = async (path, init) => {
     h.calls.push({ path, init });
@@ -590,16 +631,19 @@ test('restored draft images and chat use the same compact skeleton and canonical
   const composer: ComposerContext = { draft, operation: 'prompt', disabled: false };
   const component = frontend.composerAbove![0]!.component;
   h.render(component, composer); h.flushEffects(); await settle();
-  const draftTree = h.render(component, composer);
-  const card = descendants(draftTree).find(element => element.props.className === 'cf-card')!;
-  const image = descendants(card).find(element => element.type === 'img')!;
+  let draftTree = h.render(component, composer);
+  const card = descendants(draftTree).find(element => element.props.className === 'cf-row')!;
+  assert.equal(descendants(card).some(element => element.type === 'img'), false);
+  openFile(card);
+  draftTree = h.render(component, composer); h.flushEffects();
+  const image = descendants(draftTree).find(element => element.type === 'img')!;
   assert.equal(image.props.src, `${apiBase}/files/${fileId}/body.png`);
   (image.props.onLoad as () => void)();
   const node: RenderNode = { kind: 'attachment', origin: { sessionId: 'fixture', messageId: 'restored' }, label: attachment.displayName, attachment };
   const chat = h.render(frontend.chatRenderers![0]!.component, { node });
   h.flushEffects();
   assert.equal(chat.props.className, card.props.className);
-  assert.equal(descendants(chat).find(element => element.type === 'img')!.props.src, image.props.src);
+  assert.equal(descendants(chat).some(element => element.type === 'img'), false);
   assert.equal(descendants(chat).find(element => element.type === 'a')!.props.href, `${image.props.src}?download=1`);
   assert.ok(h.calls.every(call => call.init!.method === 'HEAD'));
   assert.equal(h.calls.length, 1, 'mounted consumers share the same five-second probe round');
@@ -608,7 +652,7 @@ test('restored draft images and chat use the same compact skeleton and canonical
   frontend.dispose?.();
 });
 
-test('a thumbnail opens an explicitly closable native dialog and a changed resource closes it', async () => {
+test('a row opens an explicitly closable native dialog and a changed resource closes it', async () => {
   const h = harness();
   const frontend = await activate(h.context);
   let node: RenderNode = { kind: 'attachment', origin: { sessionId: 'fixture', messageId: 'preview' }, label: 'Synthetic pixel',
@@ -650,14 +694,14 @@ test('a thumbnail opens an explicitly closable native dialog and a changed resou
   render(); h.flushEffects();
   (staleImage.props.onLoad as () => void)();
   tree = render();
-  assert.equal(tree.props['aria-busy'], true, 'an old image cannot finish a different resource');
+  assert.equal(tree.props['aria-busy'], false, 'the new resource is not loading a preview until opened');
   assert.equal(descendants(tree).some(element => element.type === 'dialog'), false);
   assert.ok(closed >= 2);
   h.unmount();
   frontend.dispose?.();
 });
 
-test('managed SVG previews reuse image elements for thumbnail and expansion without executing markup', async () => {
+test('Markdown SVG references fetch metadata only until opened and preview without executing markup', async () => {
   const h = harness();
   h.context.request = async (path, init) => {
     h.calls.push({ path, init });
@@ -671,16 +715,15 @@ test('managed SVG previews reuse image elements for thumbnail and expansion with
   const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
   render(); h.flushEffects(); await settle();
   let tree = render();
-  const image = descendants(tree).find(element => element.type === 'img')!;
-  assert.match(String(image.props.src), /\/messages\//);
+  assert.equal(tree.props.className, 'cf-reference');
+  assert.equal(descendants(tree).some(element => element.type === 'img'), false);
   assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0]!.init?.method, 'HEAD');
-  (image.props.onLoad as () => void)();
-  (descendants(tree).find(element => element.props['aria-label'] === '查看 Diagram')!.props.onClick as () => void)();
+  openFile(tree);
   tree = render();
   const expanded = descendants(tree).filter(element => element.type === 'img');
-  assert.equal(expanded.length, 2);
-  assert.equal(expanded[0]!.props.src, expanded[1]!.props.src);
+  assert.equal(expanded.length, 1);
+  assert.match(String(expanded[0]!.props.src), /\/messages\//);
   assert.equal(descendants(tree).some(element => ['iframe', 'object', 'embed'].includes(String(element.type))), false);
   assert.doesNotMatch(source, /dangerouslySetInnerHTML|innerHTML\s*=/);
   h.unmount();
@@ -725,15 +768,15 @@ test('audio/video controls stay behind an explicit play action and unsafe docume
     if (mimeType.startsWith('audio/') || mimeType.startsWith('video/')) {
       assert.ok(play);
       (play.props.onClick as () => void)();
-      tree = render();
+      tree = render(); h.flushEffects();
       const players = descendants(tree).filter(element => element.props.controls === true);
       assert.equal(players.length, 1);
       (players[0]!.props.onLoadedMetadata as () => void)();
       assert.equal(render().props['aria-busy'], false);
       (players[0]!.props.onError as () => void)();
       tree = render();
-      assert.match(JSON.stringify(tree), /无法预览/);
-      assert.equal(descendants(tree).some(element => element.type === 'dialog'), false);
+      assert.match(JSON.stringify(tree), /未能显示/);
+      assert.equal(descendants(tree).some(element => element.type === 'dialog'), true, 'failure details stay open with retry and download');
       assert.ok(descendants(tree).some(element => element.type === 'a'), 'a failed expanded player keeps the original download');
     } else {
       assert.equal(play, undefined);
@@ -745,22 +788,20 @@ test('audio/video controls stay behind an explicit play action and unsafe docume
   }
 });
 
-test('compact styles are module-scoped, wrap multiple files and constrain long filenames', async () => {
+test('compact row and inline styles stay scoped and preserve independent layout contracts', async () => {
   const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
   assert.doesNotMatch(css, /\.cf-(?:upload-button|icon-button|button)\b/, 'generic button appearance belongs to the host');
   assert.doesNotMatch(css, /var\(--(?!ck-|cf-)/, 'only public host tokens or module-owned business tokens');
   assert.doesNotMatch(css, /:hover|cursor:/, 'generic hover and interaction appearance use public CSS');
-  assert.match(css, /\.cf-card\s*\{[^}]*grid-template-columns:\s*3rem minmax\(0, 1fr\) var\(--cf-actions-width\);[^}]*width:\s*min\(17\.5rem, 75vw\);[^}]*max-width:\s*100%;[^}]*height:\s*4\.5rem;/s);
-  assert.match(css, /\.cf-attachment\s*\{[^}]*flex:\s*0 0 auto;[^}]*width:\s*min\(17\.5rem, 75vw\);/s);
-  assert.match(css, /\.cf-thumbnail\s*\{[^}]*width:\s*3rem;[^}]*height:\s*3rem;/s);
-  assert.match(css, /\.cf-thumbnail\s*\{[^}]*grid-template:\s*minmax\(0, 1fr\) \/ minmax\(0, 1fr\);/s);
+  assert.match(css, /\.cf-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) var\(--cf-actions-width\);[^}]*max-width:\s*100%;[^}]*height:\s*var\(--ck-control-size\);/s);
   assert.match(css, /\.cf-name-stem\s*\{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/s);
   assert.match(css, /\.cf-name-extension\s*\{[^}]*max-width:\s*45%;/s);
-  assert.match(css, /\.cf-card-details\s*\{[^}]*grid-template-rows:\s*1\.25rem 1\.125rem 0\.25rem;/s);
-  assert.match(css, /\.cf-card-actions\s*\{[^}]*justify-content:\s*flex-end;[^}]*width:\s*var\(--cf-actions-width\);/s);
-  assert.match(css, /\.cf-media\s*\{[^}]*object-fit:\s*contain;/s);
-  assert.match(css, /\.cf-attachment-list\s*\{[^}]*flex-wrap:\s*wrap;/s);
-  assert.doesNotMatch(css, /22rem|11rem|\b(?:body|html|:root)\b|\.chat-|line-clamp/);
+  assert.match(css, /\.cf-row-actions\s*\{[^}]*grid-template-columns:\s*repeat\(2, var\(--ck-control-size\)\);/s);
+  assert.match(css, /\.cf-expanded-media\s*\{[^}]*object-fit:\s*contain;/s);
+  assert.match(css, /\.cf-attachment-list\s*\{[^}]*flex-direction:\s*column;/s);
+  assert.match(css, /\.cf-reference-name\s*\{[^}]*display:\s*inline;[^}]*font:\s*inherit;[^}]*line-height:\s*inherit;[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere;/s);
+  assert.match(css, /\.cf-reference-link\s*\{[^}]*padding:\s*0;[^}]*border:\s*0;[^}]*background:\s*transparent;/s);
+  assert.doesNotMatch(css, /\b(?:body|html|:root)\b|\.chat-|line-clamp|\.cf-thumbnail|\.cf-card/);
   const selectors = [...css.matchAll(/(?:^|})\s*([^{}]+)\{/g)].flatMap(match => match[1]!.split(','));
   assert.ok(selectors.every(selector => selector.trim().startsWith('.cf-')), 'no global host CSS overrides');
 });
@@ -774,12 +815,12 @@ test('full names and errors are accessible on touch while all tile information a
     frontend.fileInput![0]!.receive([new File([new Uint8Array(100_001)], name)], composer);
     const render = () => h.render(frontend.composerAbove![0]!.component, composer);
     let tree = render();
-    const card = descendants(tree).find(element => element.props.className === 'cf-card')!;
-    const info = descendants(card).find(element => element.props.className === 'cf-card-details')!;
-    const actions = descendants(card).find(element => element.props.className === 'cf-card-actions')!;
+    const card = descendants(tree).find(element => element.props.className === 'cf-row')!;
+    const info = descendants(card).find(element => element.props.className === 'cf-row-name')!;
+    const actions = descendants(card).find(element => element.props.className === 'cf-row-actions')!;
     assert.equal(descendants(actions).filter(element => element.type === 'button').length, 2);
     assert.equal(descendants(info).some(element => element.type === 'button'), false);
-    const openButton = descendants(card).find(element => element.props.className === 'ck-button cf-card-open')!;
+    const openButton = descendants(card).find(element => element.props.className === 'ck-button cf-row-open')!;
     assert.equal(openButton.type, 'button');
     assert.equal(openButton.props.title, name);
     const stem = descendants(info).find(element => element.props.className === 'cf-name-stem')!;
@@ -795,7 +836,7 @@ test('full names and errors are accessible on touch while all tile information a
     assert.equal(descendants(dialog).some(element => ['img', 'video', 'iframe', 'object'].includes(String(element.type))), false);
     (dialog.props.onClose as () => void)();
     tree = render();
-    const errorButton = descendants(tree).find(element => element.props.className === 'ck-button cf-card-open')!;
+    const errorButton = descendants(tree).find(element => element.props.className === 'ck-button cf-row-open')!;
     assert.match(String(errorButton.props['aria-description']), /upload limit/);
     (errorButton.props.onClick as () => void)();
     assert.ok(descendants(render()).some(element => element.type === 'dialog'));
@@ -804,7 +845,7 @@ test('full names and errors are accessible on touch while all tile information a
   }
 });
 
-test('one card-level button previews its image, while action buttons remain siblings and late dialog close stays scoped', async () => {
+test('one row button owns visible content, actions are siblings and late dialog close stays scoped', async () => {
   const h = harness();
   const frontend = await activate(h.context);
   let node: RenderNode = {
@@ -814,14 +855,14 @@ test('one card-level button previews its image, while action buttons remain sibl
   const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
   render(); h.flushEffects();
   let tree = render();
-  const trigger = descendants(tree).find(element => element.props.className === 'ck-button cf-card-open')!;
+  const trigger = descendants(tree).find(element => element.props.className === 'ck-button cf-row-open')!;
   assert.equal(trigger.props['aria-label'], '查看 Long image name.png');
   assert.equal(descendants(tree).filter(element => element.props['aria-haspopup'] === 'dialog').length, 1);
-  assert.equal(descendants(tree).find(element => element.props.className === 'cf-thumbnail')!.type, 'span');
-  assert.equal(descendants(tree).find(element => element.props.className === 'cf-card-name')!.type, 'span');
+  assert.equal(descendants(tree).find(element => element.props.className === 'cf-file-icon')!.type, 'span');
+  assert.equal(descendants(tree).find(element => element.props.className === 'cf-row-name')!.type, 'span');
   assert.equal(descendants(trigger).some(element => element.type === 'a'), false, 'download is not nested inside preview');
-  assert.ok(descendants(trigger).some(element => element.props.className === 'cf-thumbnail'));
-  assert.ok(descendants(trigger).some(element => element.props.className === 'cf-card-name'));
+  assert.ok(descendants(trigger).some(element => element.props.className === 'cf-file-icon'));
+  assert.ok(descendants(trigger).some(element => element.props.className === 'cf-row-name'));
   assert.equal(tree.props['aria-label'], undefined, 'the main action, not a second group label, names the file');
   assert.equal(tree.props.onClick, undefined, 'actions cannot bubble to a container preview handler');
   (trigger.props.onClick as () => void)();
@@ -836,7 +877,7 @@ test('one card-level button previews its image, while action buttons remain sibl
   render(); h.flushEffects();
   tree = render();
   assert.equal(descendants(tree).some(element => element.type === 'dialog'), false);
-  (descendants(tree).find(element => element.props.className === 'ck-button cf-card-open')!.props.onClick as () => void)();
+  openFile(tree);
   tree = render();
   const next = descendants(tree).find(element => element.type === 'dialog')!;
   assert.notEqual(next.props.key, original.props.key);
@@ -846,14 +887,12 @@ test('one card-level button previews its image, while action buttons remain sibl
   frontend.dispose?.();
 });
 
-test('preview target covers the tile without adding a grid row or an external focus outline', async () => {
+test('row progress and reserved actions never add height or use an overlay hit target', async () => {
   const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
-  assert.match(css, /\.cf-card-open\s*\{[^}]*display:\s*grid;[^}]*grid-column:\s*1 \/ -1;[^}]*width:\s*100%;[^}]*height:\s*100%;/s);
-  assert.match(css, /\.cf-card \.cf-card-open:focus-visible\s*\{\s*outline-offset:\s*-3px;/s);
-  assert.doesNotMatch(css, /\.cf-(?:card-details|thumbnail)\s*\{[^}]*pointer-events:\s*none;/s);
-  assert.match(css, /\.cf-card-actions\s*\{[^}]*pointer-events:\s*none;/s);
-  assert.match(css, /\.cf-card-actions > button,\s*\.cf-card-actions > a\s*\{[^}]*pointer-events:\s*auto;/s);
-  assert.doesNotMatch(css, /cf-preview-button|cf-card-name:focus-visible|cf-card-status:focus-visible/);
+  assert.match(css, /\.cf-row-open\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*1\.25rem minmax\(0, 1fr\) var\(--cf-status-width\);[^}]*height:\s*100%;/s);
+  assert.match(css, /\.cf-row \.cf-row-open:focus-visible\s*\{\s*outline-offset:\s*-3px;/s);
+  assert.match(css, /\.cf-progress\s*\{[^}]*position:\s*absolute;[^}]*height:\s*2px;/s);
+  assert.doesNotMatch(css, /pointer-events|cf-card-open|cf-preview-button/);
 });
 
 test('a card opened before image metadata arrives becomes the preview rather than staying an empty details dialog', async () => {
@@ -865,7 +904,7 @@ test('a card opened before image metadata arrives becomes the preview rather tha
     target: './image.svg', label: 'Loading image' };
   const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
   let tree = render(); h.flushEffects();
-  (descendants(tree).find(element => element.props.className === 'ck-button cf-card-open')!.props.onClick as () => void)();
+  openFile(tree);
   tree = render();
   const initial = descendants(tree).find(element => element.type === 'dialog')!;
   let opens = 0, closes = 0;
@@ -881,4 +920,57 @@ test('a card opened before image metadata arrives becomes the preview rather tha
   assert.equal(closes, 0, 'metadata arrival must not close and refocus the modal');
   h.unmount();
   frontend.dispose?.();
+});
+
+test('Markdown links and images stay inline regardless of labels, line breaks or media availability', async () => {
+  for (const kind of ['link', 'image'] as const) {
+    const h = harness();
+    h.context.request = async () => new Response(null, { headers: { 'content-type': 'application/octet-stream', 'content-length': '42' } });
+    const frontend = await activate(h.context);
+    const name = '报告-'.repeat(100) + 'report.py:128';
+    const node: RenderNode = { kind, origin: { sessionId: 'fixture', messageId: kind },
+      target: 'report.py#L128', label: name };
+    const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+    let tree = render(); h.flushEffects(); await settle();
+    tree = render();
+    assert.equal(tree.props.className, 'cf-reference');
+    const link = descendants(tree).find(element => element.type === 'a')!;
+    assert.equal(link.props.className, 'cf-reference-link');
+    assert.match(String(link.props.href), /\/messages\//);
+    assert.deepEqual(descendants(link).find(element => element.props.className === 'cf-reference-name')!.props.children, [name]);
+    assert.equal(descendants(tree).filter(element => element.type === 'a').length, 1);
+    assert.equal(descendants(tree).some(element => ['button', 'img', 'progress'].includes(String(element.type))), false);
+    for (const modifiers of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) {
+      assert.equal(click(link, modifiers), false, 'modified clicks retain native link behavior');
+      assert.equal(descendants(render()).some(element => element.type === 'dialog'), false);
+    }
+    assert.equal(click(link), true);
+    const dialog = descendants(render()).find(element => element.type === 'dialog')!;
+    assert.ok(descendants(dialog).some(element => element.props['aria-label'] === `下载 ${name}`));
+    assert.match(JSON.stringify(dialog), /暂不支持预览/);
+    assert.equal(descendants(link).some(element => element.props['aria-label'] === `下载 ${name}`), false);
+    h.unmount(); frontend.dispose?.();
+  }
+});
+
+test('inline errors retain one link and expose the complete cause and retry only in the dialog', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100 });
+  const h = harness();
+  const frontend = await activate(h.context);
+  const node: RenderNode = { kind: 'image', origin: { sessionId: 'fixture', messageId: 'inline-timeout' },
+    target: './unresolved.png', label: 'Same name' };
+  const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+  render(); h.flushEffects();
+  t.mock.timers.tick(5001);
+  const failed = render();
+  assert.equal(failed.props.className, 'cf-reference');
+  assert.equal(descendants(failed).filter(element => element.type === 'a').length, 1);
+  assert.equal(descendants(failed).some(element => element.type === 'button'), false);
+  const link = descendants(failed).find(element => element.type === 'a')!;
+  assert.match(String(link.props['aria-description']), /availability is still unknown/);
+  openFile(failed);
+  const dialog = descendants(render()).find(element => element.type === 'dialog')!;
+  assert.match(JSON.stringify(dialog), /availability is still unknown/);
+  assert.ok(descendants(dialog).some(element => element.props['aria-label'] === '重新加载 Same name'));
+  h.unmount(); frontend.dispose?.();
 });
