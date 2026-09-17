@@ -164,6 +164,7 @@ export const activate: ActivateFrontend = context => {
     const sequence = React.useRef(0);
     const dialog = React.useRef<HTMLDialogElement>(null);
     const rowTrigger = React.useRef<HTMLButtonElement>(null);
+    const closeButton = React.useRef<HTMLButtonElement>(null);
     const open = expanded?.identity === identity;
     const [attempt, setAttempt] = React.useState(0);
     const [media, setMedia] = React.useState<{ resource: string; status: 'pending' | 'ready' | 'failed'; error?: string }>();
@@ -271,7 +272,7 @@ export const activate: ActivateFrontend = context => {
         onClose={() => setExpanded(current => current === expanded ? undefined : current)}>
         <span className="cf-dialog-header">
           <span className="cf-dialog-name" dir="auto">{name}</span>
-          <button type="button" className="ck-button" autoFocus onClick={() => dialog.current?.close()}>
+          <button ref={closeButton} type="button" className="ck-button" autoFocus onClick={() => dialog.current?.close()}>
             <Icon small name="x" />
             {preview && !failure ? '关闭预览' : '关闭详情'}
           </button>
@@ -288,7 +289,13 @@ export const activate: ActivateFrontend = context => {
             controls preload="metadata" onLoadedMetadata={() => mediaResult(mediaKey, true)} onError={() => mediaResult(mediaKey, false)} />
             : <audio key={mediaKey} className="cf-expanded-media" src={preview.url} aria-label={name} controls preload="metadata"
               onLoadedMetadata={() => mediaResult(mediaKey, true)} onError={() => mediaResult(mediaKey, false)} />)}
-        <div className="cf-dialog-actions">{retryAction}{downloadAction}{actions}</div>
+        <div className="cf-dialog-actions">
+          {retryAction && <span className="cf-dialog-retry" onClickCapture={() => {
+            // Retry replaces its own action; keep keyboard focus inside the modal.
+            closeButton.current?.focus({ preventScroll: true });
+          }}>{retryAction}</span>}
+          {downloadAction}{actions}
+        </div>
       </dialog>, page.body)}
     </span>;
   }

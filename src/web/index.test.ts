@@ -974,3 +974,27 @@ test('inline errors retain one link and expose the complete cause and retry only
   assert.ok(descendants(dialog).some(element => element.props['aria-label'] === '重新加载 Same name'));
   h.unmount(); frontend.dispose?.();
 });
+
+test('retry hands focus to the persistent close control before replacing its own modal action', async () => {
+  const h = harness();
+  h.context.request = async () => new Response(null, { status: 503 });
+  const frontend = await activate(h.context);
+  const node: RenderNode = { kind: 'link', origin: { sessionId: 'fixture', messageId: 'retry-focus' },
+    target: './report.txt', label: 'Retry target' };
+  const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+  render(); h.flushEffects(); await settle();
+  openFile(render());
+  const dialog = descendants(render()).find(element => element.type === 'dialog')!;
+  const close = descendants(dialog).find(element => element.props.autoFocus)!;
+  let focused = 0;
+  (close.props.ref as { current: unknown }).current = { focus(options: unknown) {
+    assert.deepEqual(options, { preventScroll: true });
+    focused++;
+  } };
+  const retry = descendants(dialog).find(element => element.props.className === 'cf-dialog-retry')!;
+  (retry.props.onClickCapture as () => void)();
+  click(descendants(retry).find(element => element.type === 'button')!);
+  assert.equal(focused, 1);
+  assert.equal(descendants(render()).find(element => element.type === 'dialog')!.props.key, dialog.props.key);
+  h.unmount(); frontend.dispose?.();
+});
