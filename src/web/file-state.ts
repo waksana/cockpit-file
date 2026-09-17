@@ -108,17 +108,17 @@ export class UploadStore {
     this.options = options;
   }
 
-  private scope(sessionId: string): UploadScope {
-    let scope = this.scopes.get(sessionId);
+  private scope(draftId: string): UploadScope {
+    let scope = this.scopes.get(draftId);
     if (!scope) {
       scope = { entries: [], listeners: new Set(), snapshot: { items: [] }, owned: new Map() };
-      this.scopes.set(sessionId, scope);
+      this.scopes.set(draftId, scope);
     }
     return scope;
   }
 
   snapshot(draft: ModuleDraft): UploadSnapshot {
-    return this.scope(draft.sessionId).snapshot;
+    return this.scope(draft.id).snapshot;
   }
 
   subscribe(draft: ModuleDraft, listener: () => void): () => void {
@@ -129,7 +129,7 @@ export class UploadStore {
   }
 
   private bind(draft: ModuleDraft): UploadScope {
-    const scope = this.scope(draft.sessionId);
+    const scope = this.scope(draft.id);
     if (scope.draft) this.observe(scope);
     if (!scope.draft || (scope.entries.length === 0 && scope.owned.size === 0)) {
       scope.unsubscribe?.();
@@ -172,18 +172,18 @@ export class UploadStore {
     return false;
   }
 
-  receive(files: readonly File[], context: ComposerContext): void {
-    if (this.disposed || files.length === 0) return;
+  receive(files: readonly File[], context: ComposerContext): boolean {
+    if (this.disposed || files.length === 0) return false;
     const scope = this.bind(context.draft);
-    if (!this.editable(scope, context.draft)) return;
+    if (!this.editable(scope, context.draft)) return false;
     if (context.disabled || context.operation !== 'prompt') {
       this.reject(scope, 'Files can only be attached to an available prompt.');
-      return;
+      return false;
     }
     const pending = scope.entries.filter(entry => !entry.attached).length;
     if (scope.draft!.getSnapshot().attachments.length + pending + files.length > MAX_ATTACHMENTS) {
       this.reject(scope, `A prompt supports at most ${MAX_ATTACHMENTS} attachments. Remove a file before adding more.`);
-      return;
+      return false;
     }
     let entries: UploadEntry[];
     try {
@@ -193,7 +193,7 @@ export class UploadStore {
       }));
     } catch {
       this.reject(scope, 'Cannot create an upload identity. Use a secure browser connection and try again.');
-      return;
+      return false;
     }
     // This guard belongs to the captured draft, not the currently mounted view.
     scope.release ??= scope.draft!.block('请等待文件上传完成，或移除未完成的附件');
@@ -206,6 +206,7 @@ export class UploadStore {
     scope.error = undefined;
     this.publish(scope);
     for (const entry of entries) void this.upload(scope, entry);
+    return !this.disposed && !!scope.release && entries.every(entry => scope.entries.some(item => item.id === entry.id));
   }
 
   retry(draft: ModuleDraft, id: string): void {
@@ -241,14 +242,19 @@ export class UploadStore {
     if (owned) void this.discard(owned.operationId);
   }
 
-  removeAttachment(draft: ModuleDraft, id: string): void {
+  removeAttachment(draft: ModuleDraft, id: string, remove?: () => boolean): void {
     if (this.disposed) return;
     const scope = this.bind(draft);
     if (!this.editable(scope, draft)) return;
     const snapshot = draft.getSnapshot();
     const owned = scope.draft === draft && !snapshot.pending ? scope.owned.get(id) : undefined;
     try {
-      draft.removeAttachment(id);
+      if (remove) {
+        if (!remove()) return;
+      } else draft.removeAttachment(id);
+      if (draft.getSnapshot().attachments.some(item => item.id === id)) {
+        throw new Error('Attachment removal did not update the captured draft');
+      }
     } catch (error) {
       this.options.report(error);
       return;

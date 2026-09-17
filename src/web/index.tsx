@@ -1,5 +1,6 @@
 import type {
-  ActivateFrontend, ComposerContext, ModuleDraft, ModuleFrontend, RenderNode,
+  ActivateFrontend, AttachmentProps, ComposerContext, ComposerInteractions, ComposerProps,
+  DraftReference, MarkdownNode, MarkdownRendererProps, ModuleDraft, ModuleFrontend,
 } from '@cockpit/module-api';
 import type { ReactNode } from 'react';
 import { isLocalFileReference, messageFileUrl, nativeFileUrl } from '../shared/files.ts';
@@ -8,25 +9,37 @@ import { decodeNativeBlob, unavailableBlobReason, type NativeBlob } from './blob
 import { icons } from './icons.ts';
 
 export const activate: ActivateFrontend = context => {
-  if (context.uiVersion !== 1 || typeof context.createPortal !== 'function') {
-    throw new Error('Cockpit File requires host Module UI v1 and context.createPortal; upgrade the paired host first.');
+  if (context.apiVersion !== 2 || context.uiVersion !== 1 || typeof context.createPortal !== 'function' || !context.state) {
+    throw new Error('Cockpit File requires frontend API v2, Module UI v1, context.state and context.createPortal; upgrade the paired host first.');
   }
   const createPortal = context.createPortal;
   const React = context.react;
   const nativePathPrefix = typeof context.config.nativePathPrefix === 'string' ? context.config.nativePathPrefix : '';
   const maxBytes = typeof context.config.maxBytes === 'number' && Number.isSafeInteger(context.config.maxBytes) && context.config.maxBytes > 0
     ? context.config.maxBytes : DEFAULT_MAX_BYTES;
-  const uploads = new UploadStore({
-    request: context.request, report: context.report, apiBase: context.apiBase, nativePathPrefix, maxBytes,
-  });
-  const blobReleases = new Set<() => void>();
-  const probes = new FileProbes(context.request, context.apiBase);
+  const resources = context.state.register({
+    id: 'view-resources',
+    create: () => new Set<() => void>(),
+    dispose: releases => { for (const release of [...releases]) release(); releases.clear(); },
+  }).get();
+  const uploads = context.state.register({
+    id: 'uploads',
+    create: () => new UploadStore({
+      request: context.request, report: context.report, apiBase: context.apiBase, nativePathPrefix, maxBytes,
+    }),
+    dispose: store => store.dispose(),
+  }).get();
+  const probes = context.state.register({
+    id: 'file-probes',
+    create: () => new FileProbes(context.request, context.apiBase),
+    dispose: store => store.dispose(),
+  }).get();
   const page = typeof document === 'undefined' ? undefined : document;
-  const visibilityChanged = () => probes.setVisible(page?.visibilityState !== 'hidden');
+  const visibilityChanged = () => probes.setVisible(context.state.host.getSnapshot().visible);
   visibilityChanged();
-  page?.addEventListener('visibilitychange', visibilityChanged);
+  resources.add(context.state.host.subscribe(visibilityChanged));
 
-  function useDraft(draft: ModuleDraft) {
+  function useDraft(draft: DraftReference) {
     return React.useSyncExternalStore(
       React.useCallback(listener => draft.subscribe(listener), [draft]),
       React.useCallback(() => draft.getSnapshot(), [draft]),
@@ -51,61 +64,29 @@ export const activate: ActivateFrontend = context => {
     return <Icon small name={name === 'remove' ? 'x' : name === 'retry' ? 'rotate-cw' : 'download'} />;
   }
 
-  function UploadAction(composer: ComposerContext) {
-    const input = React.useRef<HTMLInputElement>(null);
-    const selectionContext = React.useRef<ComposerContext | null>(null);
+  function UploadAction({ composer, interactions }: { composer: ComposerProps; interactions: ComposerInteractions }) {
     const draft = useDraft(composer.draft);
     const disabled = composer.disabled || draft.pending || composer.operation !== 'prompt' || !nativePathPrefix || context.signal.aborted;
-    return <span className="cf-upload-action">
-      <button
+    return <button
         type="button"
         className="ck-icon-button"
         disabled={disabled}
         title={composer.operation === 'prompt' ? `添加文件（单个最多 ${formatBytes(maxBytes)}）` : '当前操作不接受附件'}
         aria-label="添加文件"
-        onClick={() => {
-          selectionContext.current = composer;
-          input.current?.click();
-        }}
+        onClick={() => { if (!disabled && !disposed) interactions.pickFiles(); }}
       >
         <Icon name="paperclip" />
-      </button>
-      <input
-        ref={input} type="file" multiple className="cf-file-input" tabIndex={-1} aria-label="选择文件"
-        disabled={disabled}
-        onChange={event => {
-          const files = Array.from(event.currentTarget.files ?? []);
-          event.currentTarget.value = '';
-          const bound = selectionContext.current;
-          selectionContext.current = null;
-          if (bound) uploads.receive(files, bound);
-        }}
-      />
-    </span>;
+      </button>;
   }
 
-  function AttachmentList(composer: ComposerContext) {
+  function PendingAttachments(composer: ComposerContext) {
     const draft = useDraft(composer.draft);
     const pending = useUploads(composer.draft);
     const disabled = composer.disabled || draft.pending;
-    const ready = draft.attachments;
-    if (!ready.length && !pending.items.length && !pending.error) return null;
+    if (!pending.items.length && !pending.error) return null;
     return <section className="cf-attachments" aria-label="文件附件">
       {pending.error && <p className="cf-error" role="alert">{pending.error}</p>}
-      {(ready.length > 0 || pending.items.length > 0) && <ul className="cf-attachment-list">
-        {ready.map(item => {
-          const name = item.value.displayName || '附件';
-          const actions = <button type="button" className="ck-icon-button ck-danger" disabled={disabled} title="移除"
-            onClick={() => uploads.removeAttachment(composer.draft, item.id)} aria-label={`移除 ${name}`}><ActionIcon name="remove" /></button>;
-          const status = draft.pending ? '正在提交' : '准备就绪';
-          const url = item.value.type === 'file' ? nativeFileUrl(item.value.path, nativePathPrefix, context.apiBase) : null;
-          return <li className="cf-attachment" key={item.id}>
-            {url ? <FileCard url={url} name={name} actions={actions} status={status} download={false} />
-              : item.value.type === 'blob'
-                ? <BlobCard attachment={item.value} name={name} actions={actions} status={status} download={false} />
-                : <FileTile name={name} status={status} actions={actions} />}
-          </li>;
-        })}
+      {pending.items.length > 0 && <ul className="cf-attachment-list">
         {pending.items.map(item => {
           const retry = item.status === 'failed' ? <button type="button" className="ck-icon-button" title="重试上传"
             disabled={disabled || composer.operation !== 'prompt'}
@@ -300,11 +281,7 @@ export const activate: ActivateFrontend = context => {
     </span>;
   }
 
-  function nodeUrl(node: RenderNode): string | null {
-    if (node.kind === 'attachment') {
-      return node.attachment?.type === 'file'
-        ? nativeFileUrl(node.attachment.path, nativePathPrefix, context.apiBase) : null;
-    }
+  function nodeUrl(node: MarkdownNode): string | null {
     if (!node.target || !isLocalFileReference(node.target)) return null;
     try {
       return messageFileUrl(context.apiBase, node.origin, node.target);
@@ -361,13 +338,13 @@ export const activate: ActivateFrontend = context => {
       const release = () => {
         if (url) URL.revokeObjectURL(url);
         url = undefined;
-        blobReleases.delete(release);
+        resources.delete(release);
       };
       try {
         const blob = file ?? decodeNativeBlob({ type: 'blob', data, mimeType }, maxBytes);
         url = URL.createObjectURL(blob);
         setState({ data, mimeType, file, url, size: blob.size, mime: blob.type });
-        blobReleases.add(release);
+        resources.add(release);
       } catch (error) {
         release();
         context.report(error);
@@ -392,13 +369,28 @@ export const activate: ActivateFrontend = context => {
       retry={retry} downloadUrl={download && resource ? resource.url : undefined} actions={actions} />;
   }
 
-  function FileRenderer({ node }: { node: RenderNode }) {
-    if (node.kind === 'attachment' && node.attachment?.type === 'blob') {
-      return <BlobCard attachment={node.attachment} name={node.label || node.attachment.displayName || '附件'} />;
-    }
+  function FileRenderer({ node, fallback }: MarkdownRendererProps) {
     const url = nodeUrl(node);
-    if (!url) return <span>{node.label}</span>;
-    return <FileCard key={url} url={url} inline={node.kind !== 'attachment'} name={node.label || node.attachment?.displayName || '文件'} />;
+    if (!url) return fallback;
+    return <FileCard key={url} url={url} inline name={node.label || '文件'} />;
+  }
+
+  function AttachmentCard(props: AttachmentProps & { url?: string }) {
+    const { attachment, label, source, pending, actions, onRemove, url } = props;
+    const draft = source.kind === 'draft';
+    const name = label || attachment.displayName || '附件';
+    const remove = draft && onRemove ? <button type="button" className="ck-icon-button ck-danger"
+      disabled={props.disabled || pending} title="移除" aria-label={`移除 ${name}`}
+      onClick={() => uploads.removeAttachment(context.state.bindDraft(source.draft), source.id, onRemove)}>
+      <ActionIcon name="remove" />
+    </button> : null;
+    const card = {
+      name, actions: remove ? <>{actions}{remove}</> : actions,
+      status: draft ? pending ? '正在提交' : '准备就绪' : undefined,
+      download: !draft,
+    };
+    return attachment.type === 'blob' ? <BlobCard {...card} attachment={attachment} />
+      : url ? <FileCard {...card} url={url} /> : <FileTile {...card} />;
   }
 
   let disposed = false;
@@ -406,26 +398,42 @@ export const activate: ActivateFrontend = context => {
     if (disposed) return;
     disposed = true;
     context.signal.removeEventListener('abort', dispose);
-    page?.removeEventListener('visibilitychange', visibilityChanged);
-    uploads.dispose();
-    probes.dispose();
-    for (const release of [...blobReleases]) release();
   }
   context.signal.addEventListener('abort', dispose, { once: true });
   if (context.signal.aborted) dispose();
   const frontend: ModuleFrontend = {
+    apiVersion: 2,
     writes: ['attachments'],
-    composerActions: [{ id: 'upload', component: UploadAction }],
-    composerAbove: [{ id: 'attachments', component: AttachmentList }],
-    rendersDraftAttachments: true,
-    fileInput: [{
-      id: 'upload',
-      accepts: files => !disposed && !!nativePathPrefix && files.length > 0,
-      receive: (files, composer) => uploads.receive(files, composer),
+    components: [{
+      id: 'file-composer',
+      boundary: 'composer',
+      wrap: Base => function FileComposer(props) {
+        const draft = context.state.bindDraft(props.draft);
+        return <Base {...props}
+          attachments={<>{props.attachments}<PendingAttachments draft={draft} operation={props.operation} disabled={props.disabled} /></>}
+          actions={interactions => <>{props.actions?.(interactions)}<UploadAction composer={props} interactions={interactions} /></>}
+          onFiles={selection => {
+            if (disposed || context.signal.aborted || !nativePathPrefix || selection.files.length === 0) {
+              return props.onFiles?.(selection) ?? false;
+            }
+            return uploads.receive(selection.files, {
+              ...selection.target, draft: context.state.bindDraft(selection.target.draft),
+            });
+          }} />;
+      },
+    }, {
+      id: 'file-attachment',
+      boundary: 'attachment',
+      wrap: Base => function FileAttachment(props) {
+        const url = props.attachment.type === 'file'
+          ? nativeFileUrl(props.attachment.path, nativePathPrefix, context.apiBase) : null;
+        if (disposed || (props.source.kind !== 'draft' && props.attachment.type !== 'blob' && !url)) return <Base {...props} />;
+        return <AttachmentCard {...props} url={url ?? undefined} />;
+      },
     }],
-    chatRenderers: [{
-      id: 'files',
-      matches: node => !disposed && ((node.kind === 'attachment' && node.attachment?.type === 'blob') || nodeUrl(node) !== null),
+    markdown: [{
+      id: 'file-markdown',
+      matches: node => !disposed && nodeUrl(node) !== null,
       component: FileRenderer,
     }],
     dispose,

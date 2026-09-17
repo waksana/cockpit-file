@@ -1,13 +1,3 @@
-.cf-upload-action {
-  display: inline-flex;
-  align-items: center;
-  flex: none;
-}
-
-.cf-file-input {
-  display: none;
-}
-
 .cf-attachments {
   min-width: 0;
   margin-block: 0.4rem;

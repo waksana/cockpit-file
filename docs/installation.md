@@ -1,30 +1,18 @@
 # 下载、构建与安装
 
-**cockpit-file 0.1.6** 配合 **Cockpit v0.2.0** 运行包或下述固定源码；
-不能对已发布的 Cockpit v0.1.0 直接执行模块命令。
-
-**0.1.5 的配套 UI 要求：** 前端要求 `context.uiVersion === 1`
-及公共 `context.createPortal`，旧宿主会被明确拒绝；不能仅凭宿主版本号或 API v1 推断支持。
+**cockpit-file 0.1.7 尚未发布。** 当前源码要求配套宿主的 Web API v2，
+公共 UI v1 与 `context.createPortal`。模块包和后端 API 仍为 v1，后端行为没有随本次 Web 迁移改变。
+前端 context/返回声明必须是 API v2；不能仅凭宿主版本号或后端 API v1 推断支持。
 公共规则见宿主[模块 UI 指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md)。
-当前 `tooling/host-sdk.json` 固定包含该能力及管理页回读、原生弹窗键盘归属修复的真实宿主提交
-[`79e2946bab382ff68e3cf2a84d42827f011cbe53`](https://github.com/waksana/cockpit/commit/79e2946bab382ff68e3cf2a84d42827f011cbe53)
-（Cockpit 0.2.0 / Module API v1）；已从该干净提交重新导出并核验 SDK，前端直接使用其权威类型。
-该提交已通过宿主 PR #19 合入，模块 API/公共样式与 v0.2.0 发行源码一致；
-本次保留已审阅、已导出的 SDK pin，不将它冒充为宿主 release commit。
-紧凑展示不增加宿主接口；继续使用 0.1.5 所需的公共 UI v1/portal，SDK pin 不变。
-安装时先升级宿主，后启用模块并冷启动。CI 发布不执行安装、部署或重启。
+当前真实宿主提交、版本和导出输入只在
+[`tooling/host-sdk.json`](../tooling/host-sdk.json) 固定。前端直接使用其导出的权威类型。
+旧 Web 插口不保留兼容层，宿主与两个迁移模块须配套升级后冷启动；
+不能先运行新宿主却期待旧模块前端继续兼容。CI 不执行安装、部署或重启。
+已发行 0.1.6 的使用方法和兼容条件见其 tag 文档，不把本开发分支当成已发布资产。
 
-本次输入区配套调整已通过 [waksana/cockpit#7](https://github.com/waksana/cockpit/pull/7) 合入，
-当前固定提交记录在 [`tooling/host-sdk.json`](../tooling/host-sdk.json)。
-0.1.3 的相对产物路径支持依赖已合入的 [waksana/cockpit#15](https://github.com/waksana/cockpit/pull/15)
-传递原生 `workspacePath`。旧宿主省略该上下文时，`files/...` 不猜测第二个目录是否存在。
-不能直接配合缺少 rendersDraftAttachments 声明支持的旧宿主；
-已发布版本使用对应 tag 的文档和构建基线。
-
-普通安装在 [v0.1.6 Release](https://github.com/waksana/cockpit-file/releases/tag/v0.1.6)
-发布完成后下载 `cockpit-file-0.1.6.tgz` 和 `cockpit-file-0.1.6.tgz.sha256`，
-执行 `sha256sum -c cockpit-file-0.1.6.tgz.sha256` 后按下方安装步骤启用。
-若资产尚未生成，请等待该版本 workflow；不要将旧版包当作本次紧凑展示更新。
+将来发行 0.1.7 后，下载 `cockpit-file-0.1.7.tgz` 和 `cockpit-file-0.1.7.tgz.sha256`，
+执行 `sha256sum -c cockpit-file-0.1.7.tgz.sha256` 后按下方安装步骤启用。
+若资产尚未发布，不能用旧包冒充这次 Web 接入迁移。
 Source code ZIP/tar 不是模块安装包。只有源码开发需要执行 SDK 准备和构建步骤。
 
 安装前了解[复制标签页与删除的已知限制](release-notes.md#known-limitation)：
@@ -68,8 +56,8 @@ pnpm package
 默认输出：
 
 ```text
-module-output/cockpit-file-0.1.6.tgz
-module-output/cockpit-file-0.1.6.tgz.sha256
+module-output/cockpit-file-0.1.7.tgz
+module-output/cockpit-file-0.1.7.tgz.sha256
 ```
 
 输出目录必须不存在，也可以 `pnpm package /absolute/new/output` 指定新目录。
@@ -88,7 +76,7 @@ React 与 portal 渲染器由宿主注入，
 ```sh
 node --import ./apps/server/node_modules/tsx/dist/loader.mjs \
   apps/server/src/module-cli.ts install \
-  /absolute/path/cockpit-file-0.1.6.tgz --trust-local-code --enable
+  /absolute/path/cockpit-file-0.1.7.tgz --trust-local-code --enable
 ```
 
 该确认表示信任本地代码，不是密码、签名验证或安全沙箱。
