@@ -48,7 +48,7 @@ Agent 用原生工具生成文件，正常回复 Markdown
 | 用户能力 | 聊天上传、拖拽/粘贴、附件草稿、文件卡片、支持类型的预览和下载 |
 | 文件库 | 全局总览、汉堡菜单管理页、列表搜索和管理删除接口延后 |
 | 原生附件 | 使用 SDK 已支持的 attachments，优先返回并发送服务器可读 file 路径 |
-| 草稿字段 | 模块声明写 attachments，通过本体受控方法修改；上传期间统一阻止所有发送入口 |
+| 草稿字段 | 模块注册仅适用于 prompt 的附件 schema，拥有校验/actions/原生投影/ACK；本体基础草稿不内建附件 |
 | Agent 协作 | 普通 Markdown 文件链接/图片，不强制调用上传 MCP 或输出私有标记 |
 | 观察范围 | 只处理模块实际启用后的新实时输出；不为此增加历史轮询、加载或保活 |
 | 历史 | 只读取已有快照，绝不补捕获；未捕获的旧文件引用失败，不做兼容 |
@@ -109,7 +109,7 @@ Agent 用原生工具生成文件，正常回复 Markdown
 
 | 项目 | 当前实现 |
 | --- | --- |
-| 注册 | 后端 activate v1 不变；Web activate v2 注册 state、composer/attachment middleware 和 Markdown renderer |
+| 注册 | 后端 activate v1 不变；Web activate v2 注册 state 服务/附件 schema、composer/原生附件 middleware 和 Markdown renderer |
 | 新输出 | 已加载会话的新 ephemeral start/delta 建立扫描状态；无新流的旧完整事件不捕获 |
 | 引用 | 行内 Markdown link/image；相对路径、绝对路径、本地 file URL；未知 cwd 的相对引用失败 |
 | 限制 | 有界扫描/引用数/工作队列/上传大小；数值和配置入口见安装文档 |

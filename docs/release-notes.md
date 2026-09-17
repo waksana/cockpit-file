@@ -5,12 +5,17 @@ Module manifest/backend API remain v1. This source is not a published or install
 
 ## Changes since 0.1.6
 
-- Register shared upload/probe state services instead of adding a host file-state mirror.
-- Enhance Composer and native/draft Attachment components through typed middleware.
-  Remove the previous dedicated contribution slots and attachment-list hiding flag.
+- Register shared upload/probe services and a prompt-only draft attachment schema.
+  Validation, native projection, persistence/legacy restore and ACK cleanup belong
+  to the module; the base draft has no attachment field or missing-file fallback.
+- Enhance Composer with the entire ready+pending file list and native historical
+  Attachment components with file presentation. No host-built draft attachment group,
+  dedicated list boundary or attachment-list hiding flag.
 - Keep a separate Markdown link/image renderer; native attachments no longer pass through it.
 - Use one host picker/paste/drop handoff with a captured draft reference and explicit
-  retained-selection guards. Shared state outlives component/session navigation.
+  module-owned state for retained selections. Shared state outlives component/session navigation.
+- Native questions use separate request-keyed drafts; prompt text/files stay cached
+  and return when the decision ends. File UI is absent on inapplicable draft purposes.
 - Middleware adds no HTML wrapper or empty placeholder. Preserve the existing
   compact 40px/44px rows, true inline references, independent actions and body portals.
 - HTTP behavior, capture/storage, native attachment delivery and preview deadlines

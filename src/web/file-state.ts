@@ -1,8 +1,9 @@
-import type { ComposerContext, DraftAttachment, ModuleDraft, ModuleFrontendContext } from '@cockpit/module-api';
+import type { ModuleFrontendContext } from '@cockpit/module-api';
+import type { FileComposerContext, FileAttachment, FileDraft } from './file-draft.ts';
+import { MAX_ATTACHMENTS } from './file-draft.ts';
 import { fileRequestPath, managedFileUrl, nativeFileUrl } from '../shared/files.ts';
 
 export const DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
-const MAX_ATTACHMENTS = 20;
 
 type Request = ModuleFrontendContext['request'];
 type Report = ModuleFrontendContext['report'];
@@ -25,19 +26,19 @@ export interface UploadSnapshot {
 
 interface UploadEntry extends UploadItem {
   file?: File;
-  result?: DraftAttachment;
+  result?: FileAttachment;
   controller?: AbortController;
   attached?: boolean;
 }
 
 interface UploadScope {
-  draft?: ModuleDraft;
+  draft?: FileDraft;
   entries: UploadEntry[];
   listeners: Set<() => void>;
   snapshot: UploadSnapshot;
   release?: () => void;
   error?: string;
-  owned: Map<string, { operationId: string; value?: DraftAttachment['value']; attached?: boolean }>;
+  owned: Map<string, { operationId: string; value?: FileAttachment['value']; attached?: boolean }>;
   unsubscribe?: () => void;
 }
 
@@ -117,18 +118,18 @@ export class UploadStore {
     return scope;
   }
 
-  snapshot(draft: ModuleDraft): UploadSnapshot {
+  snapshot(draft: FileDraft): UploadSnapshot {
     return this.scope(draft.id).snapshot;
   }
 
-  subscribe(draft: ModuleDraft, listener: () => void): () => void {
+  subscribe(draft: FileDraft, listener: () => void): () => void {
     if (this.disposed) return () => {};
     const scope = this.bind(draft);
     scope.listeners.add(listener);
     return () => scope.listeners.delete(listener);
   }
 
-  private bind(draft: ModuleDraft): UploadScope {
+  private bind(draft: FileDraft): UploadScope {
     const scope = this.scope(draft.id);
     if (scope.draft) this.observe(scope);
     if (!scope.draft || (scope.entries.length === 0 && scope.owned.size === 0)) {
@@ -166,13 +167,13 @@ export class UploadStore {
     scope.unsubscribe = undefined;
   }
 
-  private editable(scope: UploadScope, draft: ModuleDraft): boolean {
+  private editable(scope: UploadScope, draft: FileDraft): boolean {
     if (!draft.getSnapshot().pending && !scope.draft!.getSnapshot().pending) return true;
     this.reject(scope, '消息正在提交，请等待回执后再修改附件。');
     return false;
   }
 
-  receive(files: readonly File[], context: ComposerContext): boolean {
+  receive(files: readonly File[], context: FileComposerContext): boolean {
     if (this.disposed || files.length === 0) return false;
     const scope = this.bind(context.draft);
     if (!this.editable(scope, context.draft)) return false;
@@ -209,7 +210,7 @@ export class UploadStore {
     return !this.disposed && !!scope.release && entries.every(entry => scope.entries.some(item => item.id === entry.id));
   }
 
-  retry(draft: ModuleDraft, id: string): void {
+  retry(draft: FileDraft, id: string): void {
     if (this.disposed) return;
     const scope = this.bind(draft);
     if (!this.editable(scope, draft)) return;
@@ -226,7 +227,7 @@ export class UploadStore {
     void this.upload(scope, replacement);
   }
 
-  remove(draft: ModuleDraft, id: string): void {
+  remove(draft: FileDraft, id: string): void {
     if (this.disposed) return;
     const scope = this.bind(draft);
     if (!this.editable(scope, draft)) return;
@@ -242,16 +243,14 @@ export class UploadStore {
     if (owned) void this.discard(owned.operationId);
   }
 
-  removeAttachment(draft: ModuleDraft, id: string, remove?: () => boolean): void {
+  removeAttachment(draft: FileDraft, id: string): void {
     if (this.disposed) return;
     const scope = this.bind(draft);
     if (!this.editable(scope, draft)) return;
     const snapshot = draft.getSnapshot();
     const owned = scope.draft === draft && !snapshot.pending ? scope.owned.get(id) : undefined;
     try {
-      if (remove) {
-        if (!remove()) return;
-      } else draft.removeAttachment(id);
+      draft.removeAttachment(id);
       if (draft.getSnapshot().attachments.some(item => item.id === id)) {
         throw new Error('Attachment removal did not update the captured draft');
       }
@@ -323,7 +322,7 @@ export class UploadStore {
     }
   }
 
-  private attachment(value: unknown, entry: UploadEntry): DraftAttachment {
+  private attachment(value: unknown, entry: UploadEntry): FileAttachment {
     if (!value || typeof value !== 'object') throw new Error('Invalid upload response');
     const data = value as Record<string, unknown>;
     const fileId = data.fileId;
@@ -347,7 +346,7 @@ export class UploadStore {
     };
   }
 
-  private prune(scope: UploadScope, attachments: readonly DraftAttachment[]): void {
+  private prune(scope: UploadScope, attachments: readonly FileAttachment[]): void {
     const existing = new Set(attachments.map(item => item.id));
     scope.entries = scope.entries.filter(entry => !entry.attached || existing.has(entry.result!.id));
     // Only a successful suffix behind unresolved selections can still need reordering.

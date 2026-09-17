@@ -21,6 +21,9 @@ Agent 可以照常使用 Markdown 引用文件，不需要学习额外的发送�
 
 **当前为 0.1.7 开发源码，尚未发布或安装。** Web 层采用注册 state 服务、
 组件 middleware 和独立 Markdown link/image 渲染器；后端行为不变。
+附件属于文件模块注册的草稿 schema，完整草稿文件列表也由模块提供。
+基础草稿没有附件字段；扩展不可用时不参与发送，也不由本体补文件兜底 UI。
+原生问答使用独立草稿，普通 prompt 草稿及其文件保留，问题结束后恢复。
 需要配套宿主的 Web API v2、公共 UI v1 与 `context.createPortal`；
 旧 Web 插口不保留兼容层，不能只看宿主包版本号或后端 API v1 推断兼容。
 准确构建基线见 [`tooling/host-sdk.json`](tooling/host-sdk.json) 和[安装指南](docs/installation.md)。

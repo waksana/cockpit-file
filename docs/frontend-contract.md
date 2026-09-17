@@ -14,7 +14,7 @@
 | Cockpit Web | 文件模块 Web |
 | --- | --- |
 | 页面和组件注册、路由、布局、共享 React 与主题 | 首版的上传按钮、附件列表、FileCard 和预览内容；文件库页面延后 |
-| 当前 session/草稿上下文、受控字段修改、发送阻止 | 接收文件、上传、将就绪附件加入对应草稿 |
+| 当前 session/独立草稿、通用 schema 事务与发送阻止 | 附件 schema、接收文件、上传及模块自己的字段 actions |
 | 唯一发送动作、提交快照和晚 ACK 处理 | 不自动发送、不接管发送按钮、不维护投递队列 |
 | 原生消息身份、附件和正文的只读展示输入 | 按规则将原生附件或 Markdown 引用渲染成文件组件 |
 | 取消、作用域释放、错误反馈和阅读位置 | 业务上传状态、预览失败表现及文件操作 |
@@ -32,8 +32,9 @@
 | 注册类别 | 内容 | 文件模块 |
 | --- | --- | --- |
 | state 服务 | 一次创建、带显式 disposer 的模块状态 | 复用 UploadStore、FileProbes；HTTP、资源和按草稿/URL 的选择器留在模块 |
-| composer middleware | 增强原输入组件的普通 props、actions 和输入回调 | 上传按钮、未完成选择与上传状态 |
-| attachment middleware | 一项原生/草稿附件的呈现与动作 | 单行文件展示与按需预览，保留原移除能力 |
+| draft schema | state 注册体系中的可验证字段、投影、ACK 和持久化 | 文件模块拥有附件数据；仅适用于 prompt |
+| composer middleware | 增强原输入组件的普通 props、actions 和输入回调 | 上传按钮及完整的就绪/上传中附件列表 |
+| attachment middleware | 一项原生历史附件的呈现 | 单行文件展示与按需预览，不承担草稿列表 |
 | Markdown renderer | 已解析 link/image 的排他渲染 | 行内文件引用，不处理原生/草稿附件 |
 
 全局文件库、菜单和管理页面仍未加入首版。
@@ -56,9 +57,10 @@
 
 ```text
 activate(context.apiVersion === 2)
+  context.state.registerDraft({ id, purposes, create, validate,
+    hasContent, project, acknowledge, persistence })
   context.state.register({ id, create, dispose })
   返回 apiVersion: 2
-  writes: ["attachments"]
   components: composer / attachment middleware
   markdown: link / image renderer
 ```
@@ -74,9 +76,11 @@ state 注册返回保留具体服务方法的 handle；每个模块激活创建�
 
 不要求文件模块为了接入这些位置维护另一套路由、消息监听或重连机制。
 
-就绪附件由 attachment middleware 增强本体已经生成的附件节点，只显示一次。
-待上传项通过 composer 的普通 children/内容组合呈现，不冒充就绪原生附件。
-不再用全局布尔声明隐藏全部草稿附件；模块失败时恢复基本附件与移除能力。
+基础 draft 不含附件字段；文件模块通过自己的 schema 和服务渲染完整附件列表，
+包括就绪和未完成项，在同一列表中保持原行高、间距和顺序。
+列表通过 Composer 的普通 children 组合，不读取宿主预建附件组或隐藏标志。
+模块/schema 不可用时，本体不显示文件兜底列表、不增加文件恢复阻止，也不提交这些字段；
+普通文字仍可发送。不透明的已序列化 namespace 可保留，不能当成已发送或已删除。
 上传入口直接使用宿主公共图标按钮类，保留 tooltip、可访问名称、
 键盘焦点和真实禁用状态；不重复基础按钮 CSS，也不依赖本体私有 DOM、store 或旧上传实现。
 展示形态只按已有的输入来源决定，不检查文本前后换行、不查询私有 DOM、不根据文件是否 ready 切换：
@@ -122,14 +126,17 @@ Markdown 引用使用带真实资源 href 的 `a`，继承正文的字号和行�
 | 场景 | 必需信息 |
 | --- | --- |
 | 输入组件/事件 | 捕获的 DraftReference、当前操作类型、输入可用性、唯一文件回调 |
-| 草稿 state | 稳定生命周期 id、只读快照，经 bindDraft 获得当前模块的授权 actions |
-| 附件组件 | 原生附件描述、原生消息或草稿来源、受控 onRemove 与其他 actions、pending/disabled |
+| 草稿 state | 稳定生命周期 id/purpose、基础快照与通用能力；模块 schema scope 提供自己的字段快照及 update |
+| 附件组件 | 原生历史附件描述、消息来源及基础显示；草稿行由模块自己的组件提供 |
 | Markdown 渲染 | 实际 link/image 节点的目标和显示文字，以及所属消息上下文 |
 
 异步上传必须持有开始时的草稿句柄。用户切换会话后，不能重新读取“当前 session”
 并把旧上传结果加入新会话。
 视图卸载与草稿释放是不同生命周期：切换页面可以释放视图监听，
 不能因此丢掉仍由原草稿持有的上传结果或提前解除发送阻止。
+原生 ask/plan/elicitation 选择请求身份独立的回答草稿，普通 prompt 草稿原样缓存。
+文件 schema 只适用于 prompt，故输入区文件内容自然随草稿切换而不显示，
+不是清空、搬运或增加特殊隐藏状态。失败回答保留回答草稿；请求结束后恢复普通草稿。
 
 消息身份、列表下标、DOM key 和模块 fileId 是不同概念；具体规则见
 [文件引用与地址](file-references.md)。
@@ -148,8 +155,8 @@ Markdown 引用使用带真实资源 href 的 `a`，继承正文的字号和行�
 
 约束：
 
-- `onFiles(selection)` 同步返回交接结果；只有所有文件已进入模块 state 并有草稿阻止或就绪附件时返回 true。
-  异步上传随后继续。返回 false、抛错或缺少处理器时，本体保留明确的恢复阻止，不静默丢掉选择。
+- `onFiles(selection)` 同步返回交接结果；有效选择由模块 state 持有，异步上传随后继续。
+  模块负责有效选择的失败、取消和阻止；模块/schema 缺失不产生宿主文件恢复 UI。
 - 没有文件时不拦截普通粘贴；混合文字和文件时不得吞掉文字。
 - 不能注册全页面粗暴拦截，影响其他页面或其他模块。
 - 同一批文件只交给一个选中的处理器，不能多个插件各上传一次。
@@ -178,29 +185,35 @@ Markdown 引用使用带真实资源 href 的 `a`，继承正文的字号和行�
 prompt 上限仍是 20 项附件，选择器不能与最终发送上限冲突。
 原生事件中的附件描述与发送输入不完全等形，不能不经适配就互相强制转换。
 
-模块声明要修改的公共草稿字段，例如：
+附件是文件模块注册的草稿 schema，而不是本体内建字段：
 
-```ts
-{ writes: ['attachments'] }
+```text
+registerDraft
+  id: attachments
+  purposes: [prompt]
+  模块提供：create / validate / hasContent / project / acknowledge / persistence
 ```
 
-`context.state.bindDraft(reference)` 提供当前模块绑定草稿的追加/移除方法，不暴露任意 store.setState。
-当前方法为 getSnapshot/subscribe、appendAttachments/removeAttachment、editText 和 block。
-快照中的每个就绪附件带本体协调所需的 `{id, value}`，其中 value 才是原生 NativeAttachment；
-本体发送时只发送 value，不把 UI 身份带入原生协议。
-声明用于接口校验、协作和作用域约束，不是同进程插件的安全沙箱。
-普通文字由本体保留；其他模块需要编辑文字时使用单独声明的文字接口。
+`forDraft(reference)` 返回适用的稳定字段 scope，非 prompt 返回 undefined。
+scope 仅能验证型更新自己的数据，不能任意修改本体或其他模块的 state。
+文件模块自己的 adapter/actions 负责追加、移除、顺序、上限和正在提交时的限制。
+就绪记录的 `{id, value}` 属于模块 schema；只有 value 是原生 NativeAttachment。
+project 显式生成原生 `{ attachments: values }`，不把模块 UI 身份、上传进度等一起发送。
+原生投影和本体保留参数/其他模块字段冲突时明确失败，不静默覆盖。
+基础文字及原生发送仍由本体处理；这种协作约束不是同进程插件的安全沙箱。
 
 文件模块应当：
 
 1. 上传并得到已就绪的托管文件。
 2. 获取或转换成 SDK 原生附件。
-3. 将附件追加到绑定草稿的 attachments。
+3. 将附件追加到捕获的 prompt 草稿对应的模块字段。
 4. 通过原生附件数组让本体正常发送，不插入私有正文标记。
 
 上传进度、File 对象、object URL、重试状态不写进原生 attachments。
-文字和就绪附件描述只由宿主 SessionDraft 的原生草稿持久化负责；
-文件模块不维护第二份浏览器存储，也不保存文件二进制或未完成选择的元数据。
+文字由本体持久化；就绪附件由文件 schema 提供版本化编码，宿主通用持久化器保存不透明 namespace。
+模块 restore 处理自己的编码及旧草稿记录中的附件迁移，本体没有 attachments 分支。
+有已保存的空值标记时不得再次导入旧附件。无效已存数据明确失败，不伪造空列表。
+文件模块不另维护一套浏览器存储，也不保存文件二进制或未完成选择的元数据。
 刷新后丢弃全部上传中、上传失败及尚未成功加入草稿的选择和对应发送阻止；
 不恢复占位项，不导入或清理旧的模块上传缓存。需要继续上传时，用户重新选择本地文件。
 每个已确认的上传结果应立即加入捕获的宿主草稿，不等待前面的文件成功：
@@ -215,8 +228,8 @@ prompt 上限仍是 20 项附件，选择器不能与最终发送上限冲突。
 正常上传没有底部“请等待”提示或全局红框；真正的校验错误、上传失败和重试操作仍清晰可读。
 
 显式移除先立即更新草稿/取消当前上传并释放相应阻止，不等待网络删除。
-就绪附件通过组件公开的 `onRemove()` 调用本体受控移除；只有它确认成功且该项已退出捕获草稿后，
-模块才按原有资格执行丢弃。不通过附件消失推断用户点击，也不解析宿主按钮的 React/DOM 内部结构。
+就绪附件通过文件模块自己的 schema action 从捕获草稿移除，成功后才按原有资格执行丢弃。
+不通过附件消失推断用户点击，也不解析宿主按钮的 React/DOM 内部结构。
 仅本次 UploadStore 激活自己发起、从未暴露给原生 pending 提交的上传操作有资格
 调用 `DELETE /uploads/:operationId`；该调用只接受 204 成功，其余响应或网络失败通过
 `context.report` 报告，不撤销用户的草稿移除。此处是“丢弃本标签页尚未使用的上传”，
@@ -262,8 +275,8 @@ prompt 上限仍是 20 项附件，选择器不能与最终发送上限冲突。
 
 用户发送时，本体一次捕获文字、就绪附件及其修订身份，执行一次原生调用。
 允许只有附件而没有文字的普通 prompt。
-原生 ask/plan-feedback 等操作若不支持附件，应明确阻止不兼容输入，
-不能静默丢弃附件或擅自改为普通 prompt。
+原生 ask/plan-feedback 等操作使用独立请求草稿，文件 schema 不适用。
+不读取或提交缓存 prompt 的字段，也不擅自把回答改为普通 prompt。
 旁边存在工具 elicitation 卡片不会把文字编辑器的普通 prompt 改成 elicitation 回答；
 编辑器操作类型跟随它实际调用的原生 API。
 
@@ -321,4 +334,5 @@ Blob URL 随内容变化、组件卸载和模块停止释放；预览五秒超�
 - 通用展示资源图、每卡片 SSE、必须随 native event 发送的模块 sidecar。
 - 文件专用的第二套发送队列、私有 prompt 标记或旧草稿兼容层。
 
-公共机制收敛为：**注册表、输入事件分派、受控草稿修改/发送阻止、只读消息渲染上下文**。
+公共机制收敛为：**state 服务与草稿 schema、组件 middleware、独立 Markdown 渲染器**。
+输入事件、原生传输和资源生命周期是宿主基础能力，不是文件业务状态。

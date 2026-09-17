@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { ComposerContext, DraftAttachment, ModuleDraft, ModuleDraftSnapshot } from '@cockpit/module-api';
+import type {
+  FileComposerContext, FileAttachment, FileDraft, FileDraftSnapshot,
+} from './file-draft.ts';
 import { FileProbes, formatBytes, previewKind, UploadStore } from './file-state.ts';
 import type { ProbeClock } from './file-state.ts';
 
@@ -10,14 +12,15 @@ const fileId = (name: string) => `f_${Buffer.from(name).toString('hex').padEnd(6
 const fileUrl = `${apiBase}/files/${fileId('abc')}/body.png`;
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 
-class Draft implements ModuleDraft {
+class Draft implements FileDraft {
   readonly id = crypto.randomUUID();
   readonly sessionId: string;
-  snapshot: ModuleDraftSnapshot = { text: '', attachments: [], blocks: [], revision: 0, pending: false, unconfirmed: false };
+  readonly purpose = { kind: 'prompt' } as const;
+  snapshot: FileDraftSnapshot = { text: '', attachments: [], blocks: [], hasContent: false, revision: 0, pending: false, unconfirmed: false };
   listeners = new Set<() => void>();
   blocks = 0;
   releases = 0;
-  appended: DraftAttachment[][] = [];
+  appended: FileAttachment[][] = [];
 
   constructor(id: string) { this.sessionId = id; }
   getSnapshot() { return this.snapshot; }
@@ -25,7 +28,7 @@ class Draft implements ModuleDraft {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
-  appendAttachments(values: readonly DraftAttachment[]) {
+  appendAttachments(values: readonly FileAttachment[]) {
     const replaced = new Set(values.map(item => item.id));
     assert.equal(replaced.size, values.length, 'incoming attachment IDs must be unique');
     assert.ok(values.every(item => typeof item.id === 'string' && item.id.length > 0));
@@ -56,7 +59,7 @@ class Draft implements ModuleDraft {
   private emit() { for (const listener of this.listeners) listener(); }
 }
 
-function composer(draft: ModuleDraft, operation: ComposerContext['operation'] = 'prompt'): ComposerContext {
+function composer(draft: FileDraft, operation: FileComposerContext['operation'] = 'prompt'): FileComposerContext {
   return { draft, operation, disabled: false };
 }
 
@@ -223,7 +226,7 @@ test('reordering touches only later owned successes and keeps other drafts, modu
   const { store, calls } = uploadHarness();
   const draft = new Draft('session');
   const other = new Draft('other-session');
-  const foreign: DraftAttachment = { id: 'other-module', value: { type: 'file', path: '/synthetic/foreign' } };
+  const foreign: FileAttachment = { id: 'other-module', value: { type: 'file', path: '/synthetic/foreign' } };
   const releaseOtherModule = draft.block();
   store.receive([new File(['prefix'], 'prefix')], composer(draft));
   calls[0]!.response.resolve(uploaded('prefix'));
@@ -621,24 +624,27 @@ test('unknown submission retains exposed originals without claiming later upload
   store.dispose();
 });
 
-test('discard follows a successful controlled removal and never a declined or ineffective action', async () => {
+test('discard follows successful schema removal and never a rejected or ineffective action', async () => {
   const { store, calls, errors } = uploadHarness();
   const draft = new Draft('session');
   store.receive([new File(['a'], 'a')], composer(draft));
   calls[0]!.response.resolve(uploaded('first'));
   await settle();
   let removals = 0;
-  store.removeAttachment(draft, 'cf-upload:operation-1', () => { removals++; return false; });
+  const remove = draft.removeAttachment.bind(draft);
+  draft.removeAttachment = () => { removals++; throw new Error('Schema update failed'); };
+  store.removeAttachment(draft, 'cf-upload:operation-1');
   assert.equal(calls.length, 1);
   assert.equal(draft.snapshot.attachments.length, 1);
-  store.removeAttachment(draft, 'cf-upload:operation-1', () => true);
+  draft.removeAttachment = () => {};
+  store.removeAttachment(draft, 'cf-upload:operation-1');
   assert.equal(calls.length, 1);
-  assert.equal(errors.length, 1);
-  store.removeAttachment(draft, 'cf-upload:operation-1', () => {
+  assert.equal(errors.length, 2);
+  draft.removeAttachment = id => {
     removals++;
-    draft.removeAttachment('cf-upload:operation-1');
-    return true;
-  });
+    remove(id);
+  };
+  store.removeAttachment(draft, 'cf-upload:operation-1');
   assert.equal(removals, 2);
   assert.equal(calls.length, 2);
   assert.equal(calls[1]!.path, '/uploads/operation-1');

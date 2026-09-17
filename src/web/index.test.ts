@@ -5,10 +5,11 @@ import ts from 'typescript';
 import { icons } from './icons.ts';
 import type {
   ActivateFrontend, AttachmentProps, ComposerFileSelection, ComposerInteractions, ComposerProps, ComposerTarget,
-  DraftAttachment, DraftReference, HostSnapshot, MarkdownNode, MarkdownRendererProps, ModuleDraft, ModuleDraftSnapshot,
+  DraftPurpose, DraftReference, DraftSchemaScope, HostSnapshot, MarkdownNode, MarkdownRendererProps, ModuleDraft, ModuleDraftSnapshot,
   ModuleFrontend, ModuleFrontendContext, ModuleStateRegistry,
 } from '@cockpit/module-api';
 import type { ComponentType, ReactNode } from 'react';
+import { fileDraftSchema, type FileAttachment, type FileState } from './file-draft.ts';
 
 const source = await readFile(new URL('./index.tsx', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, {
@@ -16,6 +17,7 @@ const compiled = ts.transpileModule(source, {
 }).outputText
   .replaceAll("'../shared/files.ts'", JSON.stringify(new URL('../shared/files.ts', import.meta.url).href))
   .replaceAll("'./file-state.ts'", JSON.stringify(new URL('./file-state.ts', import.meta.url).href))
+  .replaceAll("'./file-draft.ts'", JSON.stringify(new URL('./file-draft.ts', import.meta.url).href))
   .replaceAll("'./icons.ts'", JSON.stringify(new URL('./icons.ts', import.meta.url).href))
   .replaceAll("'./blob.ts'", JSON.stringify(new URL('./blob.ts', import.meta.url).href));
 const { activate: activateModule } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`) as { activate: ActivateFrontend };
@@ -44,39 +46,46 @@ Object.defineProperty(globalThis, 'document', { configurable: true, value: {
 } });
 
 const bindings = new WeakMap<DraftReference, ModuleDraft>();
+const preparers = new Set<(draft: Draft) => void>();
+const fileScopes = new WeakMap<DraftReference, DraftSchemaScope<FileState>>();
 class Draft implements ModuleDraft {
   readonly id = crypto.randomUUID();
   readonly sessionId: string;
+  readonly purpose: DraftPurpose;
   readonly reference: DraftReference;
-  snapshot: ModuleDraftSnapshot = { text: '', attachments: [], blocks: [], revision: 0, pending: false, unconfirmed: false };
+  snapshot: ModuleDraftSnapshot = { text: '', blocks: [], hasContent: false, revision: 0, pending: false, unconfirmed: false };
   listeners = new Set<() => void>();
   blocks = 0;
-  constructor(sessionId = 'synthetic-session') {
+  constructor(sessionId = 'synthetic-session', purpose: DraftPurpose = { kind: 'prompt' }) {
     this.sessionId = sessionId;
+    this.purpose = purpose;
     this.reference = Object.freeze({
-      id: this.id, sessionId, getSnapshot: () => this.getSnapshot(), subscribe: (listener: () => void) => this.subscribe(listener),
+      id: this.id, sessionId, purpose, getSnapshot: () => this.getSnapshot(), subscribe: (listener: () => void) => this.subscribe(listener),
     });
     bindings.set(this.reference, this);
+    for (const prepare of preparers) prepare(this);
   }
   getSnapshot() { return this.snapshot; }
   subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
-  appendAttachments(items: readonly DraftAttachment[]) {
-    const ids = new Set(items.map(item => item.id));
-    this.snapshot = { ...this.snapshot, attachments: [...this.snapshot.attachments.filter(item => !ids.has(item.id)), ...items] };
-    for (const listener of this.listeners) listener();
+  get fileSnapshot() { return fileScopes.get(this.reference)!.getSnapshot(); }
+  appendAttachments(items: readonly FileAttachment[]) {
+    fileScopes.get(this.reference)!.update(current => {
+      const ids = new Set(items.map(item => item.id));
+      const revision = current.revision + 1;
+      return { revision, attachments: [...current.attachments.filter(item => !ids.has(item.id)), ...items.map(item => ({ ...item, revision }))] };
+    });
   }
   removeAttachment(id: string) {
-    this.snapshot = { ...this.snapshot, attachments: this.snapshot.attachments.filter(item => item.id !== id) };
-    for (const listener of this.listeners) listener();
+    fileScopes.get(this.reference)!.update(current => ({ ...current, attachments: current.attachments.filter(item => item.id !== id) }));
   }
   editText(text: string) { this.snapshot = { ...this.snapshot, text }; }
   block(reason: string) {
     const id = crypto.randomUUID();
     this.blocks++;
-    this.snapshot = { ...this.snapshot, blocks: [...this.snapshot.blocks, { id, reason, orphaned: false }] };
+    this.snapshot = { ...this.snapshot, blocks: [...this.snapshot.blocks, { id, reason }] };
     let released = false;
     return () => {
-      if (released || this.snapshot.blocks.some(block => block.id === id && block.orphaned)) return;
+      if (released) return;
       released = true;
       this.blocks--;
       this.snapshot = { ...this.snapshot, blocks: this.snapshot.blocks.filter(block => block.id !== id) };
@@ -159,6 +168,8 @@ function harness() {
     },
   };
   const services: { id: string; service: object; dispose(): void }[] = [];
+  const schemas: { id: string; purposes: readonly string[] }[] = [];
+  const schemaDisposers: (() => void)[] = [];
   const disposedServices: string[] = [];
   const hostListeners = new Set<() => void>();
   const boundDrafts = new Set<Draft>();
@@ -167,10 +178,44 @@ function harness() {
   const state: ModuleStateRegistry = {
     host: { getSnapshot: () => host, subscribe: listener => { hostListeners.add(listener); return () => hostListeners.delete(listener); } },
     register(registration) {
+      assert.equal(schemas.length, 1, 'the file schema registers before services');
       assert.equal(services.some(service => service.id === registration.id), false);
       const service = registration.create();
       services.push({ id: registration.id, service, dispose() { disposedServices.push(registration.id); registration.dispose(service); } });
       return { id: registration.id, get() { if (stopped) throw new Error('Revoked state'); return service; } };
+    },
+    registerDraft(registration) {
+      assert.equal(services.length, 0, 'schema registration is activation-only, before services/render');
+      schemas.push(registration);
+      const scopes = new Map<DraftReference, DraftSchemaScope<ReturnType<typeof registration.create>>>();
+      const prepare = (draft: Draft) => {
+        if (!registration.purposes.includes(draft.purpose.kind)) return;
+        let snapshot = registration.validate(registration.create(draft.reference));
+        const listeners = new Set<() => void>();
+        const scope: DraftSchemaScope<typeof snapshot> = {
+          draft: draft.reference,
+          getSnapshot: () => snapshot,
+          subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); },
+          update: change => {
+            if (stopped) throw new Error('Revoked schema');
+            const next = registration.validate(change(snapshot));
+            registration.persistence?.serialize(next);
+            snapshot = next;
+            draft.snapshot = { ...draft.snapshot, hasContent: !!draft.snapshot.text.trim() || registration.hasContent(next) };
+            for (const listener of listeners) listener();
+            for (const listener of draft.listeners) listener();
+            return snapshot;
+          },
+        };
+        scopes.set(draft.reference, scope);
+        fileScopes.set(draft.reference, scope as unknown as DraftSchemaScope<FileState>);
+      };
+      preparers.add(prepare);
+      schemaDisposers.push(() => { preparers.delete(prepare); scopes.clear(); });
+      return { id: registration.id, forDraft: reference => {
+        if (stopped || !bindings.has(reference)) throw new Error('Foreign or revoked schema reference');
+        return scopes.get(reference);
+      } };
     },
     bindDraft(reference) {
       assert.equal(stopped, false);
@@ -183,10 +228,9 @@ function harness() {
   registries.set(state, () => {
     if (stopped) return;
     stopped = true;
-    for (const draft of boundDrafts) {
-      draft.snapshot = { ...draft.snapshot, blocks: draft.snapshot.blocks.map(block => ({ ...block, orphaned: true })) };
-    }
     for (const service of [...services].reverse()) service.dispose();
+    for (const dispose of schemaDisposers) dispose();
+    for (const draft of boundDrafts) assert.equal(draft.blocks, 0, 'module loss releases generic leases without file fallback UI');
   });
   const context: ModuleFrontendContext = {
     apiVersion: 2, moduleId: 'cockpit-file', react: react as unknown as ModuleFrontendContext['react'],
@@ -203,7 +247,7 @@ function harness() {
       return new Promise(() => {});
     },
   };
-  return { context, refs: root.refs, calls, errors, signal, services, disposedServices, hostListeners,
+  return { context, refs: root.refs, calls, errors, signal, services, schemas, disposedServices, hostListeners,
     setHost(patch: Partial<HostSnapshot>) { host = Object.freeze({ ...host, ...patch }); for (const listener of hostListeners) listener(); },
     resetHooks: () => { current = root; reset(); },
     render(component: unknown, props: unknown): Element {
@@ -256,8 +300,7 @@ function nativeComponent(frontend: ModuleFrontend) {
     const React = contexts.get(frontend)!.react;
     const Attachment = attachmentComponent(frontend);
     nativeComponents.set(frontend, ({ node }: { node: NativeFixture }) => React.createElement(Attachment, {
-      source: { kind: 'message', origin: node.origin, index: 0 }, attachment: node.attachment, label: node.label,
-      disabled: false, pending: false, children: node.label,
+      origin: node.origin, index: 0, attachment: node.attachment, label: node.label, children: node.label,
     }));
   }
   return nativeComponents.get(frontend);
@@ -268,29 +311,14 @@ function enhanceComposer(frontend: ModuleFrontend) {
     const React = contexts.get(frontend)!.react;
     const middleware = frontend.components!.find(item => item.boundary === 'composer')!;
     composerComponents.set(frontend, middleware.wrap(props => React.createElement('fixture-composer', {},
-      props.children, props.attachments, props.actions?.({ pickFiles() {} }))));
+      props.children, props.actions?.({ pickFiles() {} }))));
   }
   return composerComponents.get(frontend)!;
 }
 function composerProps(frontend: ModuleFrontend, target: ComposerTarget): ComposerProps {
-  const React = contexts.get(frontend)!.react;
   const draft = target.draft instanceof Draft ? target.draft.reference : target.draft;
-  const Attachment = attachmentComponent(frontend);
-  const snapshot = draft.getSnapshot();
   return {
     ...target, draft, busy: false, sendBlocked: false, onTextChange() {}, onSubmit() {},
-    attachments: snapshot.attachments.length ? React.createElement('section', { className: 'fixture-draft-attachments' },
-      ...snapshot.attachments.map(item => React.createElement(Attachment, {
-        key: item.id, source: { kind: 'draft', draft, id: item.id }, attachment: item.value,
-        label: item.value.displayName || '附件', disabled: target.disabled || snapshot.pending, pending: snapshot.pending,
-        children: item.value.displayName || '附件',
-        onRemove: () => {
-          if (target.disabled || draft.getSnapshot().pending) return false;
-          const present = draft.getSnapshot().attachments.some(value => value.id === item.id);
-          if (present) bindings.get(draft)!.removeAttachment(item.id);
-          return present;
-        },
-      }))) : undefined,
   };
 }
 const composerFixtures = new WeakMap<ModuleFrontend, unknown>();
@@ -316,22 +344,23 @@ test('activation registers scoped concrete services and only v2 component and Ma
   const h = harness();
   const frontend = await activate(h.context);
   assert.equal(frontend.apiVersion, 2);
-  assert.deepEqual(frontend.writes, ['attachments']);
+  assert.equal(frontend.writes, undefined);
+  assert.deepEqual(h.schemas.map(schema => ({ id: schema.id, purposes: schema.purposes })), [{ id: 'attachments', purposes: ['prompt'] }]);
   assert.deepEqual(frontend.components!.map(item => item.boundary), ['composer', 'attachment']);
   assert.equal(frontend.markdown!.length, 1);
-  assert.deepEqual(Object.keys(frontend).sort(), ['apiVersion', 'components', 'dispose', 'markdown', 'writes']);
-  const ids = [...h.services, ...frontend.components!, ...frontend.markdown!].map(item => item.id);
+  assert.deepEqual(Object.keys(frontend).sort(), ['apiVersion', 'components', 'dispose', 'markdown']);
+  const ids = [...h.schemas, ...h.services, ...frontend.components!, ...frontend.markdown!].map(item => item.id);
   assert.equal(new Set(ids).size, ids.length, 'state, component and Markdown IDs are unique in one module');
-  assert.deepEqual(h.services.map(item => item.id), ['view-resources', 'uploads', 'file-probes']);
-  assert.equal(h.services[1]!.service.constructor.name, 'UploadStore');
-  assert.equal(h.services[2]!.service.constructor.name, 'FileProbes');
+  assert.deepEqual(h.services.map(item => item.id), ['file-drafts', 'view-resources', 'uploads', 'file-probes']);
+  assert.equal(h.services[2]!.service.constructor.name, 'UploadStore');
+  assert.equal(h.services[3]!.service.constructor.name, 'FileProbes');
   assert.equal(h.calls.length, 0, 'registration does not fetch or capture files');
   assert.doesNotMatch(compiled, /(?:from\s*['"]react|react\/jsx-runtime|createRoot|innerHTML|sessionStore|sessionStorage|cf-pending)/);
   h.signal.abort();
-  assert.deepEqual(h.disposedServices, ['file-probes', 'uploads', 'view-resources']);
+  assert.deepEqual(h.disposedServices, ['file-probes', 'uploads', 'view-resources', 'file-drafts']);
   assert.equal(h.hostListeners.size, 0);
   frontend.dispose?.();
-  assert.equal(h.disposedServices.length, 3, 'host cleanup invokes each scoped disposer once');
+  assert.equal(h.disposedServices.length, 4, 'host cleanup invokes each scoped disposer once');
 });
 
 test('activation explicitly rejects missing or unsupported public UI and portal capability', async () => {
@@ -347,6 +376,9 @@ test('activation explicitly rejects missing or unsupported public UI and portal 
   for (const apiVersion of [undefined, 1, 3]) {
     await assert.rejects(async () => activate({ ...h.context, apiVersion } as unknown as ModuleFrontendContext), /frontend API v2/);
   }
+  await assert.rejects(async () => activate({
+    ...h.context, state: { ...h.context.state, registerDraft: undefined },
+  } as unknown as ModuleFrontendContext), /state\.registerDraft/);
 });
 
 test('composer middleware returns Base directly and composes inherited content, actions and editor behavior', async () => {
@@ -358,24 +390,24 @@ test('composer middleware returns Base directly and composes inherited content, 
   const Base = (_props: ComposerProps) => null;
   const Enhanced = middleware.wrap(Base) as (props: ComposerProps) => unknown;
   const notice = React.createElement('p', { id: 'core-notice' }, 'core context');
-  const attachment = React.createElement('span', { id: 'other-module-attachment' }, 'native attachment');
   const action = React.createElement('button', { id: 'other-module-action' }, 'inherited');
   const interactions: ComposerInteractions = { pickFiles() {} };
   let inheritedInteractions: ComposerInteractions | undefined;
   const props: ComposerProps = {
     ...composerProps(frontend, { draft: draft.reference, operation: 'prompt', disabled: false }),
     busy: true, sendBlocked: true, placeholder: 'native placeholder', submitLabel: 'native send',
-    children: notice, attachments: attachment,
+    children: notice,
     actions: value => { inheritedInteractions = value; return action; },
   };
   const enhanced = Enhanced(props) as Element;
   assert.equal(enhanced.type, Base, 'the HOC introduces no span/div/placeholder');
-  for (const key of ['draft', 'children', 'onTextChange', 'onSubmit', 'busy', 'sendBlocked', 'placeholder', 'submitLabel']) {
+  for (const key of ['draft', 'onTextChange', 'onSubmit', 'busy', 'sendBlocked', 'placeholder', 'submitLabel']) {
     assert.equal(enhanced.props[key], props[key as keyof ComposerProps], key);
   }
-  const attachments = enhanced.props.attachments as Element;
-  assert.equal(attachments.type, React.Fragment, 'composition uses a DOM-free fragment');
-  assert.equal((attachments.props.children as unknown[])[0], attachment);
+  const content = enhanced.props.children as Element;
+  assert.equal(content.type, React.Fragment, 'composition uses a DOM-free fragment');
+  assert.equal((content.props.children as unknown[])[0], notice);
+  assert.equal('attachments' in enhanced.props, false);
   const actions = (enhanced.props.actions as (value: ComposerInteractions) => ReactNode)(interactions) as unknown as Element;
   assert.equal(actions.type, React.Fragment);
   assert.equal((actions.props.children as unknown[])[0], action);
@@ -383,6 +415,113 @@ test('composer middleware returns Base directly and composes inherited content, 
   assert.doesNotMatch(source, /onPaste|onDrop|onKeyDown|onComposition|type="file"|stopPropagation/,
     'the module does not own clipboard text, IME, native keyboard handling or a second picker');
   frontend.dispose?.();
+});
+
+test('the entire ready and pending list uses one original section/list immediately before the editor', async () => {
+  const h = harness();
+  const frontend = await activate(h.context);
+  const draft = new Draft();
+  draft.appendAttachments([{ id: 'native-ready', value: { type: 'directory', path: '/fixture/ready', displayName: 'Ready' } }]);
+  selectFiles(frontend, { draft, operation: 'prompt', disabled: false }, [new File(['pending'], 'Pending')]);
+  const React = h.context.react;
+  const middleware = frontend.components!.find(item => item.boundary === 'composer')!;
+  const Composer = middleware.wrap(props => React.createElement('fixture-composer', {}, props.children,
+    React.createElement('textarea', { 'aria-label': 'native editor' })));
+  const props = { ...composerProps(frontend, { draft, operation: 'prompt', disabled: false }),
+    children: React.createElement('p', { id: 'existing-context' }, 'Existing context') };
+  const tree = h.render(Composer, props);
+  const all = descendants(tree);
+  const sections = all.filter(element => element.props.className === 'cf-attachments');
+  const lists = all.filter(element => element.props.className === 'cf-attachment-list');
+  assert.equal(sections.length, 1);
+  assert.equal(lists.length, 1);
+  assert.equal(sections[0]!.props['aria-label'], '文件附件');
+  const rows = descendants(lists[0]).filter(element => element.type === 'li');
+  assert.deepEqual(rows.map(row => row.props.className), ['cf-attachment', 'cf-attachment']);
+  assert.deepEqual(rows.map(row => descendants(row).find(element => element.props.className === 'ck-button cf-row-open')!.props.title),
+    ['Ready', 'Pending']);
+  assert.ok(all.findIndex(element => element.props.id === 'existing-context') < all.indexOf(sections[0]!));
+  assert.ok(all.indexOf(sections[0]!) < all.findIndex(element => element.type === 'textarea'));
+  assert.equal(all.filter(element => element.props.className === 'cf-row').length, 2);
+  assert.doesNotMatch(JSON.stringify(tree), /draft-attachments|module-composer|placeholder-container/);
+  const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.cf-attachments\s*\{[^}]*margin-block:\s*0\.4rem;/s);
+  assert.match(css, /\.cf-attachment-list\s*\{[^}]*gap:\s*0\.125rem;[^}]*margin:\s*0;[^}]*padding:\s*0;/s);
+  assert.match(css, /\.cf-row\s*\{[^}]*width:\s*32rem;[^}]*max-width:\s*100%;[^}]*height:\s*var\(--ck-control-size\);/s);
+  assert.equal('attachments' in draft.reference.getSnapshot(), false);
+  h.unmount(); frontend.dispose?.();
+});
+
+test('fresh decision drafts hide prompt files while captured uploads settle only their inactive prompt schema', async () => {
+  const h = harness();
+  let finish!: (response: Response) => void;
+  h.context.request = (path, init) => {
+    h.calls.push({ path, init });
+    return init?.method === 'POST' ? new Promise(resolve => { finish = resolve; })
+      : Promise.resolve(new Response(null, { headers: { 'content-type': 'text/plain' } }));
+  };
+  const frontend = await activate(h.context);
+  const prompt = new Draft('shared-session');
+  const promptProps = composerProps(frontend, { draft: prompt.reference, operation: 'prompt', disabled: false });
+  const captured = selectionCallback(frontend, promptProps);
+  prompt.editText('Cached prompt text');
+  const ask = new Draft(prompt.sessionId, { kind: 'ask', requestId: 'question-1' });
+  ask.editText('Separate answer');
+  const askProps = composerProps(frontend, { draft: ask.reference, operation: 'ask', disabled: false });
+  const before = h.render(enhanceComposer(frontend), askProps);
+  assert.equal(descendants(before).some(element => element.props.className === 'cf-attachments' || element.props['aria-label'] === '添加文件'), false);
+  assert.equal(selectionCallback(frontend, askProps), undefined);
+  assert.equal(fileScopes.has(ask.reference), false);
+  assert.equal(captured({ id: 'captured-prompt-selection', files: [new File(['file'], 'prompt.txt')], source: 'picker', target: promptProps }), true);
+  assert.equal(prompt.blocks, 1);
+  assert.equal(ask.blocks, 0);
+  finish(Response.json({ fileId, attachment: { type: 'file', path: `/data/files/${fileId}/ready/body.txt`, displayName: 'Prompt upload' } }));
+  await settle();
+  assert.equal(prompt.fileSnapshot.attachments.length, 1);
+  assert.equal(prompt.blocks, 0);
+  assert.equal(prompt.snapshot.text, 'Cached prompt text');
+  assert.equal(ask.snapshot.text, 'Separate answer');
+  assert.equal('attachments' in ask.getSnapshot(), false);
+  const replacementAsk = new Draft(prompt.sessionId, { kind: 'ask', requestId: 'question-1' });
+  assert.notEqual(replacementAsk.id, ask.id);
+  assert.equal(replacementAsk.snapshot.text, '');
+  for (const kind of ['plan', 'elicitation'] as const) {
+    const decision = new Draft(prompt.sessionId, { kind, requestId: 'other-request' });
+    const tree = h.render(composerComponent(frontend), { draft: decision, operation: kind, disabled: false });
+    assert.equal(descendants(tree).some(element => String(element.props.className).startsWith('cf-')), false);
+    assert.equal(fileScopes.has(decision.reference), false);
+  }
+  const restored = h.render(composerComponent(frontend), { draft: prompt, operation: 'prompt', disabled: false });
+  assert.equal(descendants(restored).filter(element => element.props.className === 'cf-row').length, 1);
+  assert.equal(h.calls.filter(call => call.init?.method === 'POST').length, 1);
+  h.unmount(); frontend.dispose?.();
+});
+
+test('ready row removal updates its schema and discards only this activation’s never-submitted upload', async () => {
+  const h = harness();
+  h.context.request = async (path, init) => {
+    h.calls.push({ path, init });
+    if (init?.method === 'POST') return Response.json({
+      fileId, attachment: { type: 'file', path: `/data/files/${fileId}/ready/body.txt`, displayName: 'Owned' },
+    });
+    return new Response(null, { status: init?.method === 'DELETE' ? 204 : 200 });
+  };
+  const frontend = await activate(h.context);
+  const draft = new Draft();
+  draft.snapshot = { ...draft.snapshot, unconfirmed: true };
+  draft.appendAttachments([{ id: 'restored', value: { type: 'file', path: '/fixture/restored', displayName: 'Restored' } }]);
+  selectFiles(frontend, { draft, operation: 'prompt', disabled: false }, [new File(['a'], 'Owned')]);
+  await settle();
+  const render = () => h.render(composerComponent(frontend), { draft, operation: 'prompt', disabled: false });
+  const first = render();
+  click(descendants(first).find(element => element.props['aria-label'] === '移除 Restored')!);
+  assert.equal(h.calls.some(call => call.init?.method === 'DELETE'), false);
+  click(descendants(render()).find(element => element.props['aria-label'] === '移除 Owned')!);
+  assert.deepEqual(draft.fileSnapshot.attachments, []);
+  assert.equal(h.calls.filter(call => call.init?.method === 'DELETE').length, 1,
+    'an unrelated old unconfirmed notice does not mark the new upload as submitted');
+  assert.equal('attachments' in draft.getSnapshot(), false);
+  h.unmount(); frontend.dispose?.();
 });
 
 test('one synchronous file handoff owns all selected files or delegates without duplicate consumption', async () => {
@@ -410,7 +549,9 @@ test('one synchronous file handoff owns all selected files or delegates without 
     assert.equal(callback({ ...selection, id: 'empty', files: [] }), true);
     assert.equal(inherited, 1, 'a declined empty selection invokes the inherited callback once');
     draft.snapshot = { ...draft.snapshot, pending: true };
-    assert.equal(callback({ ...selection, id: 'late' }), false, 'a rejection keeps the host recovery block');
+    assert.equal(callback({ ...selection, id: 'late' }), false, 'a pending rejection stays in module-owned error state');
+    const rejected = h.render(composerComponent(frontend), props);
+    assert.match(JSON.stringify(rejected), /消息正在提交/);
     assert.equal(inherited, 1, 'an attempted handoff does not dispatch the selection again');
     assert.equal(h.calls.length, 2);
     frontend.dispose?.();
@@ -423,8 +564,8 @@ test('file probes follow readonly host visibility and module resources do not cr
   a.setHost({ visible: false });
   const first = await activate(a.context);
   const second = await activate(b.context);
-  assert.notEqual(a.services[1]!.service, b.services[1]!.service);
   assert.notEqual(a.services[2]!.service, b.services[2]!.service);
+  assert.notEqual(a.services[3]!.service, b.services[3]!.service);
   const node: MarkdownNode = {
     kind: 'link', target: './test.txt', label: 'Test',
     origin: { sessionId: 'fixture', messageId: 'visibility' },
@@ -633,7 +774,6 @@ test('the upload control delegates to the host picker and its captured callback 
 test('attachment middleware preserves unknown native values and core actions without a placeholder wrapper', async () => {
   const h = harness();
   const frontend = await activate(h.context);
-  const draft = new Draft();
   const middleware = frontend.components!.find(item => item.boundary === 'attachment')!;
   const Base = () => null;
   const Enhanced = middleware.wrap(Base) as (props: AttachmentProps) => unknown;
@@ -644,19 +784,17 @@ test('attachment middleware preserves unknown native values and core actions wit
     { type: 'directory' as const, path: '/home/project' },
   ]) {
     const props: AttachmentProps = {
-      source: { kind: 'message', index: 0 }, attachment, label: 'Native attachment',
-      disabled: true, pending: true, children: 'native content', actions: action,
+      index: 0, attachment, label: 'Native attachment', children: 'native content', actions: action,
     };
     const tree = Enhanced(props) as Element;
     assert.equal(tree.type, Base);
-    assert.equal(tree.props.source, props.source);
+    assert.equal(tree.props.index, props.index);
     assert.equal(tree.props.children, props.children);
     assert.equal(tree.props.actions, action);
-    assert.equal(tree.props.disabled, true);
   }
   const tree = h.render(attachmentComponent(frontend), {
-    source: { kind: 'draft', draft: draft.reference, id: 'blob' }, attachment: { type: 'blob', mimeType: 'text/plain', data: 'YQ==' },
-    label: 'Supported', disabled: true, pending: true, children: 'core fallback', actions: action,
+    index: 0, attachment: { type: 'blob', mimeType: 'text/plain', data: 'YQ==' },
+    label: 'Supported', children: 'core fallback', actions: action,
   });
   assert.equal(tree.type, 'span');
   assert.equal(tree.props.className, 'cf-row', 'replacement is the existing file row itself');
@@ -683,8 +821,9 @@ test('attachment action is an accessible borderless icon, not a boxed label', as
   assert.equal(icon.props.strokeLinecap, 'round');
   assert.equal(icon.props.strokeLinejoin, 'round');
   assert.equal(descendants(button).some(element => element.type === 'span'), false);
-  const disabled = h.render(composerComponent(frontend), { draft, operation: 'ask', disabled: false });
-  assert.equal(descendants(disabled).find(element => element.type === 'button')!.props.disabled, true);
+  const ask = new Draft(draft.sessionId, { kind: 'ask', requestId: 'question' });
+  const answer = h.render(composerComponent(frontend), { draft: ask, operation: 'ask', disabled: false });
+  assert.equal(descendants(answer).some(element => element.type === 'button'), false);
   frontend.dispose?.();
 });
 
@@ -737,7 +876,7 @@ test('each selection has its own row and preview resource, honest progress and i
   responses[1]!(Response.json({ error: 'Synthetic network failure' }, { status: 503 }));
   await settle();
   tree = render(); h.flushEffects();
-  assert.equal(draft.snapshot.attachments.length, 0, 'late success of a removed item is ignored');
+  assert.equal(draft.fileSnapshot.attachments.length, 0, 'late success of a removed item is ignored');
   assert.match(JSON.stringify(tree), /Synthetic network failure/);
   assert.equal(descendants(tree).filter(element => element.type === 'progress').length, 0);
   assert.equal(descendants(tree).filter(element => element.props.role === 'alert').length, 1);
@@ -752,7 +891,7 @@ test('each selection has its own row and preview resource, honest progress and i
   await settle();
   render(); h.flushEffects();
   assert.equal(draft.blocks, 0);
-  assert.equal(draft.snapshot.attachments.length, 1);
+  assert.equal(draft.fileSnapshot.attachments.length, 1);
   await assert.rejects(fetch(originalUrls[1]!));
   assert.equal(h.calls[4]!.init!.method, 'HEAD');
   responses[4]!(new Response(null, { headers: { 'content-type': 'image/png', 'content-length': `${file.size}` } }));
@@ -836,8 +975,8 @@ test('selection preview URLs release on view unmount and module stop without can
   h.signal.abort();
   await assert.rejects(fetch(second));
   assert.equal(h.calls[0]!.init!.signal!.aborted, true);
-  assert.equal(draft.blocks, 1, 'host recovery retains the abandoned upload guard before running module cleanup');
-  assert.equal(draft.getSnapshot().blocks[0]!.orphaned, true);
+  assert.equal(draft.blocks, 0, 'module loss releases its generic leases without host file fallback');
+  assert.deepEqual(draft.getSnapshot().blocks, []);
   assert.equal(h.calls.length, 1, 'teardown does not delete originals');
   h.unmount();
 });
