@@ -1,6 +1,6 @@
 # 前端接入契约
 
-**当前开发源码：Web API v2，包/后端 API v1；0.1.7 尚未发行。**
+**本次 0.1.7 发行源码：Web API v2，包/后端 API v1，配套 Cockpit 0.2.3。**
 实际公共类型由 Cockpit 的 `packages/module-api` 提供，模块入口是 `activate(context)`。
 前端 context 和返回声明均为 API v2，显式校验公共 UI v1 与 `context.createPortal`；
 公共 CSS/图标/兼容规范只在宿主
