@@ -19,6 +19,7 @@ async function fixture(t: TestContext, config: Record<string, unknown> = {}) {
     apiVersion: 1, moduleId: 'cockpit-file', dataRoot: join(root, 'data'),
     apiBase: '/_modules/cockpit-file/fixed-digest/api', config, signal: controller.signal,
     report: error => { errors.push(error); },
+    invalidate() {},
   });
   t.after(async () => {
     await module.dispose?.();

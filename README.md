@@ -19,20 +19,19 @@ Agent 可以照常使用 Markdown 引用文件，不需要学习额外的发送�
 
 ## 当前状态
 
-**当前版本为 0.1.6**；可下载资产以该版本 Release workflow 成功发布为准。
-需要 Cockpit v0.2.0 的 Module API v1 / Module UI v1；Cockpit v0.1.0 不支持此模块。
-需要已合入的 [waksana/cockpit#7](https://github.com/waksana/cockpit/pull/7) 输入区配套调整；
-准确的构建基线见[安装指南](docs/installation.md)。
-0.1.5 的共享 UI 还要求宿主显式提供 `context.uiVersion: 1` 和
-`context.createPortal`；缺少能力时模块拒绝激活，不在旧宿主静默显示无样式控件。
+**当前为 0.1.7 开发源码，尚未发布或安装。** Web 层采用注册 state 服务、
+组件 middleware 和独立 Markdown link/image 渲染器；后端行为不变。
+附件属于文件模块注册的草稿 schema，完整草稿文件列表也由模块提供。
+基础草稿没有附件字段；扩展不可用时不参与发送，也不由本体补文件兜底 UI。
+原生问答使用独立草稿，普通 prompt 草稿及其文件保留，问题结束后恢复。
+需要配套宿主的 Web API v2、公共 UI v1 与 `context.createPortal`；
+旧 Web 插口不保留兼容层，不能只看宿主包版本号或后端 API v1 推断兼容。
+准确构建基线见 [`tooling/host-sdk.json`](tooling/host-sdk.json) 和[安装指南](docs/installation.md)。
 公共样式、图标和兼容规则以宿主
 [模块 UI 开发指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md) 为唯一权威。
-不可变 SDK 基线已固定为包含这些能力及管理页回读、原生弹窗键盘归属修复的宿主提交 `79e2946b`；
-该提交已通过宿主 PR #19 合入，API/公共样式与 v0.2.0 发行源码一致。
-发行顺序为先发布宿主，再发布模块；安装时也先升级宿主，后启用模块并冷启动。
-合并源码或发布资产不代表已安装或部署；旧版 0.1.4 使用其 tag 的文档。
-0.1.3 的原生产物目录接入需要已合入的 [waksana/cockpit#15](https://github.com/waksana/cockpit/pull/15)；
-不提示 Agent 修改输出，也不由模块猜测 Copilot 数据根。
+宿主与模块需要配套发行和冷启动；合并源码或发布资产不代表安装、部署或重启授权。
+已发行 0.1.6 的兼容条件与行为以其 tag 文档为准，不能用旧包代替这次 Web 接入迁移。
+原生产物目录仍来自宿主已有的 SDK 上下文，不提示 Agent 修改输出，也不猜测 Copilot 数据根。
 
 从 [Releases](https://github.com/waksana/cockpit-file/releases) 下载 `.tgz` 模块安装包和校验文件，
 按[下载与安装](docs/installation.md)使用，或从[完整文档](docs/README.md)了解流程、分工和限制。

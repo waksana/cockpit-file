@@ -4,9 +4,12 @@ import test from 'node:test';
 import ts from 'typescript';
 import { icons } from './icons.ts';
 import type {
-  ActivateFrontend, ComposerContext, DraftAttachment, ModuleDraft, ModuleDraftSnapshot,
-  ModuleFrontend, ModuleFrontendContext, RenderNode,
+  ActivateFrontend, AttachmentProps, ComposerEditorProps, ComposerProps, ComposerTarget,
+  DraftPurpose, DraftReference, DraftSchemaScope, HostSnapshot, MarkdownNode, MarkdownRendererProps, ModuleDraft, ModuleDraftSnapshot,
+  ModuleFrontend, ModuleFrontendContext, ModuleStateRegistry,
 } from '@cockpit/module-api';
+import type { ClipboardEvent, ComponentType, DragEvent } from 'react';
+import { fileDraftSchema, type FileAttachment, type FileState } from './file-draft.ts';
 
 const source = await readFile(new URL('./index.tsx', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, {
@@ -14,36 +17,96 @@ const compiled = ts.transpileModule(source, {
 }).outputText
   .replaceAll("'../shared/files.ts'", JSON.stringify(new URL('../shared/files.ts', import.meta.url).href))
   .replaceAll("'./file-state.ts'", JSON.stringify(new URL('./file-state.ts', import.meta.url).href))
+  .replaceAll("'./file-draft.ts'", JSON.stringify(new URL('./file-draft.ts', import.meta.url).href))
+  .replaceAll("'./file-input.ts'", JSON.stringify(new URL('./file-input.ts', import.meta.url).href))
   .replaceAll("'./icons.ts'", JSON.stringify(new URL('./icons.ts', import.meta.url).href))
   .replaceAll("'./blob.ts'", JSON.stringify(new URL('./blob.ts', import.meta.url).href));
-const { activate } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`) as { activate: ActivateFrontend };
+const { activate: activateModule } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`) as { activate: ActivateFrontend };
+const registries = new WeakMap<ModuleStateRegistry, () => void>();
+const contexts = new WeakMap<ModuleFrontend, ModuleFrontendContext>();
+async function activate(context: ModuleFrontendContext) {
+  try {
+    const frontend = await activateModule(context);
+    const dispose = () => { frontend.dispose?.(); registries.get(context.state)?.(); };
+    context.signal.addEventListener('abort', dispose, { once: true });
+    const loaded = { ...frontend, dispose };
+    contexts.set(loaded, context);
+    return loaded;
+  } catch (error) {
+    registries.get(context.state)?.();
+    throw error;
+  }
+}
 const fileId = `f_${'a'.repeat(64)}`;
 const apiBase = `https://host.test/cockpit/_modules/cockpit-file/${'b'.repeat(64)}/api`;
 const syntheticPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jZAAAAABJRU5ErkJggg==';
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 const body = {};
+class NativeInput extends EventTarget {
+  type = '';
+  multiple = false;
+  files: readonly File[] = [];
+  value = '';
+  clicks = 0;
+  click() { this.clicks++; }
+}
+const nativeInputs: NativeInput[] = [];
 Object.defineProperty(globalThis, 'document', { configurable: true, value: {
   body, visibilityState: 'visible', addEventListener() {}, removeEventListener() {},
+  createElement(tag: string) {
+    assert.equal(tag, 'input');
+    const input = new NativeInput();
+    nativeInputs.push(input);
+    return input;
+  },
 } });
 
+const bindings = new WeakMap<DraftReference, ModuleDraft>();
+const preparers = new Set<(draft: Draft) => void>();
+const fileScopes = new WeakMap<DraftReference, DraftSchemaScope<FileState>>();
 class Draft implements ModuleDraft {
-  sessionId = 'synthetic-session';
-  snapshot: ModuleDraftSnapshot = { text: '', attachments: [], pending: false };
+  readonly id = crypto.randomUUID();
+  readonly sessionId: string;
+  readonly purpose: DraftPurpose;
+  readonly reference: DraftReference;
+  snapshot: ModuleDraftSnapshot = { text: '', blocks: [], hasContent: false, revision: 0, pending: false, unconfirmed: false };
   listeners = new Set<() => void>();
   blocks = 0;
+  constructor(sessionId = 'synthetic-session', purpose: DraftPurpose = { kind: 'prompt' }) {
+    this.sessionId = sessionId;
+    this.purpose = purpose;
+    this.reference = Object.freeze({
+      id: this.id, sessionId, purpose, getSnapshot: () => this.getSnapshot(), subscribe: (listener: () => void) => this.subscribe(listener),
+    });
+    bindings.set(this.reference, this);
+    for (const prepare of preparers) prepare(this);
+  }
   getSnapshot() { return this.snapshot; }
   subscribe(listener: () => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
-  appendAttachments(items: readonly DraftAttachment[]) {
-    const ids = new Set(items.map(item => item.id));
-    this.snapshot = { ...this.snapshot, attachments: [...this.snapshot.attachments.filter(item => !ids.has(item.id)), ...items] };
-    for (const listener of this.listeners) listener();
+  get fileSnapshot() { return fileScopes.get(this.reference)!.getSnapshot(); }
+  appendAttachments(items: readonly FileAttachment[]) {
+    fileScopes.get(this.reference)!.update(current => {
+      const ids = new Set(items.map(item => item.id));
+      const revision = current.revision + 1;
+      return { revision, attachments: [...current.attachments.filter(item => !ids.has(item.id)), ...items.map(item => ({ ...item, revision }))] };
+    });
   }
   removeAttachment(id: string) {
-    this.snapshot = { ...this.snapshot, attachments: this.snapshot.attachments.filter(item => item.id !== id) };
-    for (const listener of this.listeners) listener();
+    fileScopes.get(this.reference)!.update(current => ({ ...current, attachments: current.attachments.filter(item => item.id !== id) }));
   }
   editText(text: string) { this.snapshot = { ...this.snapshot, text }; }
-  block() { this.blocks++; return () => { this.blocks--; }; }
+  block(reason: string) {
+    const id = crypto.randomUUID();
+    this.blocks++;
+    this.snapshot = { ...this.snapshot, blocks: [...this.snapshot.blocks, { id, reason }] };
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.blocks--;
+      this.snapshot = { ...this.snapshot, blocks: this.snapshot.blocks.filter(block => block.id !== id) };
+    };
+  }
 }
 
 interface Element {
@@ -76,7 +139,7 @@ function harness() {
   const react = {
     Fragment: Symbol('Fragment'),
     createElement(type: Element['type'], props: Element['props'] | null, ...children: unknown[]): Element {
-      return { type, props: { ...props, children } };
+      return { type, props: { ...props, ...(children.length ? { children } : {}) } };
     },
     useRef(initial: unknown) {
       const index = current.refIndex++;
@@ -120,21 +183,88 @@ function harness() {
       react.useEffect(effect, deps);
     },
   };
+  const services: { id: string; service: object; dispose(): void }[] = [];
+  const schemas: { id: string; purposes: readonly string[] }[] = [];
+  const schemaDisposers: (() => void)[] = [];
+  const disposedServices: string[] = [];
+  const hostListeners = new Set<() => void>();
+  const boundDrafts = new Set<Draft>();
+  let host: HostSnapshot = Object.freeze({ sessionId: 'synthetic-session', visible: true, connected: true });
+  let stopped = false;
+  const state: ModuleStateRegistry = {
+    host: { getSnapshot: () => host, subscribe: listener => { hostListeners.add(listener); return () => hostListeners.delete(listener); } },
+    register(registration) {
+      assert.equal(schemas.length, 1, 'the file schema registers before services');
+      assert.equal(services.some(service => service.id === registration.id), false);
+      const service = registration.create();
+      services.push({ id: registration.id, service, dispose() { disposedServices.push(registration.id); registration.dispose(service); } });
+      return { id: registration.id, get() { if (stopped) throw new Error('Revoked state'); return service; } };
+    },
+    registerDraft(registration) {
+      assert.equal(services.length, 0, 'schema registration is activation-only, before services/render');
+      schemas.push(registration);
+      const scopes = new Map<DraftReference, DraftSchemaScope<ReturnType<typeof registration.create>>>();
+      const prepare = (draft: Draft) => {
+        if (!registration.purposes.includes(draft.purpose.kind)) return;
+        let snapshot = registration.validate(registration.create(draft.reference));
+        const listeners = new Set<() => void>();
+        const scope: DraftSchemaScope<typeof snapshot> = {
+          draft: draft.reference,
+          getSnapshot: () => snapshot,
+          subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener); },
+          update: change => {
+            if (stopped) throw new Error('Revoked schema');
+            const next = registration.validate(change(snapshot));
+            registration.persistence?.serialize(next);
+            snapshot = next;
+            draft.snapshot = { ...draft.snapshot, hasContent: !!draft.snapshot.text.trim() || registration.hasContent(next) };
+            for (const listener of listeners) listener();
+            for (const listener of draft.listeners) listener();
+            return snapshot;
+          },
+        };
+        scopes.set(draft.reference, scope);
+        fileScopes.set(draft.reference, scope as unknown as DraftSchemaScope<FileState>);
+      };
+      preparers.add(prepare);
+      schemaDisposers.push(() => { preparers.delete(prepare); scopes.clear(); });
+      return { id: registration.id, forDraft: reference => {
+        if (stopped || !bindings.has(reference)) throw new Error('Foreign or revoked schema reference');
+        return scopes.get(reference);
+      } };
+    },
+    bindDraft(reference) {
+      assert.equal(stopped, false);
+      const draft = bindings.get(reference);
+      if (!draft) throw new Error('Foreign draft reference');
+      if (draft instanceof Draft) boundDrafts.add(draft);
+      return draft;
+    },
+  };
+  registries.set(state, () => {
+    if (stopped) return;
+    stopped = true;
+    for (const service of [...services].reverse()) service.dispose();
+    for (const dispose of schemaDisposers) dispose();
+    for (const draft of boundDrafts) assert.equal(draft.blocks, 0, 'module loss releases generic leases without file fallback UI');
+  });
   const context: ModuleFrontendContext = {
-    apiVersion: 1, moduleId: 'cockpit-file', react: react as unknown as ModuleFrontendContext['react'],
+    apiVersion: 2, moduleId: 'cockpit-file', react: react as unknown as ModuleFrontendContext['react'],
     uiVersion: 1,
     createPortal: (node, container) => {
       assert.equal(container, body, 'dialogs use the standard document body, never private host DOM');
       return { type: 'fixture-portal', key: null, children: node, props: { children: [node], container } };
     },
-    apiBase, config: { nativePathPrefix: '/data/files/', maxBytes: 100_000 },
+    apiBase, config: { nativePathPrefix: '/data/files/', maxBytes: 100_000 }, state,
+    onInvalidate: () => () => {},
     signal: signal.signal, report: error => errors.push(error),
     request: async (path, init) => {
       calls.push({ path, init });
       return new Promise(() => {});
     },
   };
-  return { context, refs: root.refs, calls, errors, signal,
+  return { context, refs: root.refs, calls, errors, signal, services, schemas, disposedServices, hostListeners,
+    setHost(patch: Partial<HostSnapshot>) { host = Object.freeze({ ...host, ...patch }); for (const listener of hostListeners) listener(); },
     resetHooks: () => { current = root; reset(); },
     render(component: unknown, props: unknown): Element {
       const seen = new Set<string>();
@@ -168,26 +298,114 @@ function harness() {
   };
 }
 
-function children(element: Element): Element[] {
-  return element.props.children as Element[];
+type NativeFixture = {
+  kind: 'attachment'; origin: MarkdownNode['origin']; label: string; attachment: AttachmentProps['attachment'];
+};
+const attachmentComponents = new WeakMap<ModuleFrontend, ComponentType<AttachmentProps>>();
+function attachmentComponent(frontend: ModuleFrontend) {
+  if (!attachmentComponents.has(frontend)) {
+    const React = contexts.get(frontend)!.react;
+    const middleware = frontend.components!.find(item => item.boundary === 'attachment')!;
+    attachmentComponents.set(frontend, middleware.wrap(props => React.createElement(React.Fragment, null, props.children, props.actions)));
+  }
+  return attachmentComponents.get(frontend)!;
+}
+const nativeComponents = new WeakMap<ModuleFrontend, unknown>();
+function nativeComponent(frontend: ModuleFrontend) {
+  if (!nativeComponents.has(frontend)) {
+    const React = contexts.get(frontend)!.react;
+    const Attachment = attachmentComponent(frontend);
+    nativeComponents.set(frontend, ({ node }: { node: NativeFixture }) => React.createElement(Attachment, {
+      origin: node.origin, index: 0, attachment: node.attachment, label: node.label, children: node.label,
+    }));
+  }
+  return nativeComponents.get(frontend);
+}
+const composerComponents = new WeakMap<ModuleFrontend, ComponentType<ComposerProps>>();
+const editorComponents = new WeakMap<ModuleFrontend, ComponentType<ComposerEditorProps>>();
+function enhanceEditor(frontend: ModuleFrontend) {
+  if (!editorComponents.has(frontend)) {
+    const React = contexts.get(frontend)!.react;
+    const middleware = frontend.components!.find(item => item.boundary === 'composerEditor')!;
+    editorComponents.set(frontend, middleware.wrap(({
+      draft, operation: _operation, disabled, busy: _busy, placeholder, submitLabel, sendBlocked,
+      statusInHeader: _status, editorRef, children, onTextChange, onSubmit, ...dom
+    }) => React.createElement('div', { ...dom, className: 'chat-input' },
+      children, React.createElement('textarea', { ref: editorRef, placeholder, disabled,
+        value: draft.getSnapshot().text, onChange: event => onTextChange(event.currentTarget.value) }),
+      React.createElement('button', { type: 'button', 'aria-label': 'native send', disabled: disabled || sendBlocked,
+        onClick: onSubmit }, submitLabel || 'Send'))));
+  }
+  return editorComponents.get(frontend)!;
+}
+function enhanceComposer(frontend: ModuleFrontend) {
+  if (!composerComponents.has(frontend)) {
+    const React = contexts.get(frontend)!.react;
+    const middleware = frontend.components!.find(item => item.boundary === 'composer')!;
+    const Editor = enhanceEditor(frontend);
+    composerComponents.set(frontend, middleware.wrap(props => React.createElement('fixture-composer', {},
+      props.children, React.createElement(Editor, { ...props, children: undefined }))));
+  }
+  return composerComponents.get(frontend)!;
+}
+function composerProps(frontend: ModuleFrontend, target: ComposerTarget): ComposerProps {
+  const draft = target.draft instanceof Draft ? target.draft.reference : target.draft;
+  return {
+    ...target, draft, busy: false, sendBlocked: false, onTextChange() {}, onSubmit() {},
+  };
+}
+const composerFixtures = new WeakMap<ModuleFrontend, unknown>();
+function composerComponent(frontend: ModuleFrontend) {
+  if (!composerFixtures.has(frontend)) {
+    const React = contexts.get(frontend)!.react;
+    const Composer = enhanceComposer(frontend);
+    composerFixtures.set(frontend, (target: ComposerTarget) => React.createElement(Composer, composerProps(frontend, target)));
+  }
+  return composerFixtures.get(frontend);
+}
+function editorHandlers(frontend: ModuleFrontend, props: ComposerEditorProps) {
+  const Enhanced = enhanceEditor(frontend) as (props: ComposerEditorProps) => unknown;
+  const element = Enhanced(props) as Element;
+  return element.props as unknown as ComposerEditorProps;
+}
+function fileEvent(files: readonly File[], data: Record<string, string> = {}) {
+  const transfer = { files, items: [], types: files.length ? ['Files', ...Object.keys(data)] : Object.keys(data),
+    dropEffect: 'none', getData: (type: string) => data[type] || '' };
+  return {
+    nativeEvent: {}, defaultPrevented: false,
+    preventDefault(this: { defaultPrevented: boolean }) { this.defaultPrevented = true; },
+    clipboardData: transfer, dataTransfer: transfer,
+  } as unknown as ClipboardEvent<HTMLDivElement> & DragEvent<HTMLDivElement>;
+}
+function selectFiles(frontend: ModuleFrontend, target: ComposerTarget, files: readonly File[]) {
+  const props = composerProps(frontend, target);
+  const event = fileEvent(files);
+  editorHandlers(frontend, props).onPaste?.(event);
+  return event.defaultPrevented;
 }
 
-test('activation uses the host React and exposes only the v1 public extension slots', async () => {
-  const { context, calls, signal } = harness();
-  const frontend = await activate(context);
-  assert.deepEqual(frontend.writes, ['attachments']);
-  assert.equal(frontend.composerActions?.length, 1);
-  assert.equal(frontend.composerAbove?.length, 1);
-  assert.equal(frontend.rendersDraftAttachments, true);
-  assert.equal(frontend.fileInput?.length, 1);
-  assert.equal(frontend.chatRenderers?.length, 1);
-  assert.equal(calls.length, 0, 'registration does not fetch or capture files');
-  assert.equal(frontend.fileInput![0]!.accepts([]), false);
-  assert.equal(frontend.fileInput![0]!.accepts([new File(['a'], 'a')]), true);
+test('activation registers scoped concrete services and only v2 component and Markdown boundaries', async () => {
+  const h = harness();
+  const frontend = await activate(h.context);
+  assert.equal(frontend.apiVersion, 2);
+  assert.equal(frontend.writes, undefined);
+  assert.deepEqual(h.schemas.map(schema => ({ id: schema.id, purposes: schema.purposes })), [{ id: 'attachments', purposes: ['prompt'] }]);
+  assert.deepEqual(frontend.components!.map(item => item.boundary), ['composer', 'composerEditor', 'attachment']);
+  assert.equal(frontend.markdown!.length, 1);
+  assert.deepEqual(Object.keys(frontend).sort(), ['apiVersion', 'components', 'dispose', 'markdown']);
+  const ids = [...h.schemas, ...h.services, ...frontend.components!, ...frontend.markdown!].map(item => item.id);
+  assert.equal(new Set(ids).size, ids.length, 'state, component and Markdown IDs are unique in one module');
+  assert.deepEqual(h.services.map(item => item.id), ['file-drafts', 'view-resources', 'uploads', 'file-probes', 'file-inputs']);
+  assert.equal(h.services[2]!.service.constructor.name, 'UploadStore');
+  assert.equal(h.services[3]!.service.constructor.name, 'FileProbes');
+  assert.equal(h.services[4]!.service.constructor.name, 'FileInputs');
+  assert.equal(h.calls.length, 0, 'registration does not fetch or capture files');
   assert.doesNotMatch(compiled, /(?:from\s*['"]react|react\/jsx-runtime|createRoot|innerHTML|sessionStore|sessionStorage|cf-pending)/);
-  signal.abort();
-  assert.equal(frontend.fileInput![0]!.accepts([new File(['a'], 'a')]), false);
+  h.signal.abort();
+  assert.deepEqual(h.disposedServices, ['file-inputs', 'file-probes', 'uploads', 'view-resources', 'file-drafts']);
+  assert.equal(h.hostListeners.size, 0);
   frontend.dispose?.();
+  assert.equal(h.disposedServices.length, 5, 'host cleanup invokes each scoped disposer once');
 });
 
 test('activation explicitly rejects missing or unsupported public UI and portal capability', async () => {
@@ -200,6 +418,294 @@ test('activation explicitly rejects missing or unsupported public UI and portal 
   const h = harness();
   const { createPortal: _portal, ...legacy } = h.context;
   await assert.rejects(async () => activate(legacy as unknown as ModuleFrontendContext), /createPortal/);
+  for (const apiVersion of [undefined, 1, 3]) {
+    await assert.rejects(async () => activate({ ...h.context, apiVersion } as unknown as ModuleFrontendContext), /frontend API v2/);
+  }
+  await assert.rejects(async () => activate({
+    ...h.context, state: { ...h.context.state, registerDraft: undefined },
+  } as unknown as ModuleFrontendContext), /state\.registerDraft/);
+});
+
+test('composer middleware only appends the entire list and preserves existing editor behavior', async () => {
+  const h = harness();
+  const frontend = await activate(h.context);
+  const draft = new Draft();
+  const React = h.context.react;
+  const middleware = frontend.components!.find(item => item.boundary === 'composer')!;
+  const Base = (_props: ComposerProps) => null;
+  const Enhanced = middleware.wrap(Base) as (props: ComposerProps) => unknown;
+  const notice = React.createElement('p', { id: 'core-notice' }, 'core context');
+  const props: ComposerProps = {
+    ...composerProps(frontend, { draft: draft.reference, operation: 'prompt', disabled: false }),
+    busy: true, sendBlocked: true, placeholder: 'native placeholder', submitLabel: 'native send',
+    children: notice,
+  };
+  const enhanced = Enhanced(props) as Element;
+  assert.equal(enhanced.type, Base, 'the HOC introduces no span/div/placeholder');
+  for (const key of ['draft', 'onTextChange', 'onSubmit', 'busy', 'sendBlocked', 'placeholder', 'submitLabel']) {
+    assert.equal(enhanced.props[key], props[key as keyof ComposerProps], key);
+  }
+  const content = enhanced.props.children as Element;
+  assert.equal(content.type, React.Fragment, 'composition uses a DOM-free fragment');
+  assert.equal((content.props.children as unknown[])[0], notice);
+  assert.equal('attachments' in enhanced.props, false);
+  assert.deepEqual(Object.keys(enhanced.props).sort(), Object.keys(props).sort(), 'only existing composer content is extended');
+  assert.doesNotMatch(source, /onFiles|pickFiles|ComposerInteractions|onKeyDown=|onComposition|stopPropagation/,
+    'there is no host file channel or replacement for native keyboard/IME handling');
+  frontend.dispose?.();
+});
+
+test('editor middleware extends the actual input row without wrapping its button, textarea or submit control', async () => {
+  const h = harness();
+  const frontend = await activate(h.context);
+  const draft = new Draft();
+  const React = h.context.react;
+  const middleware = frontend.components!.find(item => item.boundary === 'composerEditor')!;
+  const Base = (_props: ComposerEditorProps) => null;
+  const Enhanced = middleware.wrap(Base) as (props: ComposerEditorProps) => unknown;
+  const action = React.createElement('button', { id: 'inherited-action' }, 'inherited');
+  const props: ComposerEditorProps = {
+    ...composerProps(frontend, { draft, operation: 'prompt', disabled: false }),
+    children: action, editorRef: { current: null }, placeholder: 'native placeholder', submitLabel: 'native submit',
+    onKeyDown() {}, onCompositionStart() {}, onCompositionEnd() {}, title: 'original row',
+  };
+  const enhanced = Enhanced(props) as Element;
+  assert.equal(enhanced.type, Base);
+  for (const key of ['draft', 'onTextChange', 'onSubmit', 'onKeyDown', 'onCompositionStart', 'onCompositionEnd',
+    'editorRef', 'placeholder', 'submitLabel', 'title']) {
+    assert.equal(enhanced.props[key], props[key as keyof ComposerEditorProps], key);
+  }
+  const tree = h.render(enhanceEditor(frontend), props);
+  assert.equal(tree.type, 'div');
+  assert.equal(tree.props.className, 'chat-input');
+  assert.equal(tree.props.title, props.title);
+  assert.equal(tree.props.onKeyDown, props.onKeyDown);
+  const children = descendants(tree).filter(element => element.type !== 'svg' && element.type !== 'path');
+  const actionIndex = children.findIndex(element => element.props.id === 'inherited-action');
+  const uploadIndex = children.findIndex(element => element.props['aria-label'] === '添加文件');
+  const textareaIndex = children.findIndex(element => element.type === 'textarea');
+  assert.ok(actionIndex < uploadIndex && uploadIndex < textareaIndex);
+  assert.equal(children.filter(element => element.type === 'div').length, 1, 'no second editor wrapper');
+  assert.equal(children.some(element => element.type === 'span' || element.type === 'input'), false);
+  const textarea = children[textareaIndex]!;
+  assert.equal(textarea.props.ref, props.editorRef);
+  assert.equal(textarea.props.placeholder, props.placeholder);
+  const submit = children.find(element => element.props['aria-label'] === 'native send')!;
+  assert.equal(submit.props.onClick, props.onSubmit);
+  h.unmount(); frontend.dispose?.();
+});
+
+test('the entire ready and pending list uses one original section/list immediately before the editor', async () => {
+  const h = harness();
+  const frontend = await activate(h.context);
+  const draft = new Draft();
+  draft.appendAttachments([{ id: 'native-ready', value: { type: 'directory', path: '/fixture/ready', displayName: 'Ready' } }]);
+  selectFiles(frontend, { draft, operation: 'prompt', disabled: false }, [new File(['pending'], 'Pending')]);
+  const React = h.context.react;
+  const middleware = frontend.components!.find(item => item.boundary === 'composer')!;
+  const Editor = enhanceEditor(frontend);
+  const Composer = middleware.wrap(props => React.createElement('fixture-composer', {}, props.children,
+    React.createElement(Editor, { ...props, children: undefined })));
+  const props = { ...composerProps(frontend, { draft, operation: 'prompt', disabled: false }),
+    children: React.createElement('p', { id: 'existing-context' }, 'Existing context') };
+  const tree = h.render(Composer, props);
+  const all = descendants(tree);
+  const sections = all.filter(element => element.props.className === 'cf-attachments');
+  const lists = all.filter(element => element.props.className === 'cf-attachment-list');
+  assert.equal(sections.length, 1);
+  assert.equal(lists.length, 1);
+  assert.equal(sections[0]!.props['aria-label'], '文件附件');
+  const rows = descendants(lists[0]).filter(element => element.type === 'li');
+  assert.deepEqual(rows.map(row => row.props.className), ['cf-attachment', 'cf-attachment']);
+  assert.deepEqual(rows.map(row => descendants(row).find(element => element.props.className === 'ck-button cf-row-open')!.props.title),
+    ['Ready', 'Pending']);
+  assert.ok(all.findIndex(element => element.props.id === 'existing-context') < all.indexOf(sections[0]!));
+  assert.ok(all.indexOf(sections[0]!) < all.findIndex(element => element.type === 'textarea'));
+  assert.equal(all.filter(element => element.props.className === 'cf-row').length, 2);
+  assert.doesNotMatch(JSON.stringify(tree), /draft-attachments|module-composer|placeholder-container/);
+  const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.cf-attachments\s*\{[^}]*margin-block:\s*0\.4rem;/s);
+  assert.match(css, /\.cf-attachment-list\s*\{[^}]*gap:\s*0\.125rem;[^}]*margin:\s*0;[^}]*padding:\s*0;/s);
+  assert.match(css, /\.cf-row\s*\{[^}]*width:\s*32rem;[^}]*max-width:\s*100%;[^}]*height:\s*var\(--ck-control-size\);/s);
+  assert.equal('attachments' in draft.reference.getSnapshot(), false);
+  h.unmount(); frontend.dispose?.();
+});
+
+test('fresh decision drafts hide prompt files while captured uploads settle only their inactive prompt schema', async () => {
+  const h = harness();
+  let finish!: (response: Response) => void;
+  h.context.request = (path, init) => {
+    h.calls.push({ path, init });
+    return init?.method === 'POST' ? new Promise(resolve => { finish = resolve; })
+      : Promise.resolve(new Response(null, { headers: { 'content-type': 'text/plain' } }));
+  };
+  const frontend = await activate(h.context);
+  const prompt = new Draft('shared-session');
+  const promptProps = composerProps(frontend, { draft: prompt.reference, operation: 'prompt', disabled: false });
+  const promptTree = h.render(enhanceComposer(frontend), promptProps);
+  click(descendants(promptTree).find(element => element.props['aria-label'] === '添加文件')!);
+  const picker = nativeInputs.at(-1)!;
+  prompt.editText('Cached prompt text');
+  const ask = new Draft(prompt.sessionId, { kind: 'ask', requestId: 'question-1' });
+  ask.editText('Separate answer');
+  const askProps = composerProps(frontend, { draft: ask.reference, operation: 'ask', disabled: false });
+  const before = h.render(enhanceComposer(frontend), askProps);
+  assert.equal(descendants(before).some(element => element.props.className === 'cf-attachments' || element.props['aria-label'] === '添加文件'), false);
+  assert.equal(editorHandlers(frontend, askProps).onPaste, undefined);
+  assert.equal(fileScopes.has(ask.reference), false);
+  picker.files = [new File(['file'], 'prompt.txt')];
+  picker.dispatchEvent(new Event('change'));
+  assert.equal(prompt.blocks, 1);
+  assert.equal(ask.blocks, 0);
+  finish(Response.json({ fileId, attachment: { type: 'file', path: `/data/files/${fileId}/ready/body.txt`, displayName: 'Prompt upload' } }));
+  await settle();
+  assert.equal(prompt.fileSnapshot.attachments.length, 1);
+  assert.equal(prompt.blocks, 0);
+  assert.equal(prompt.snapshot.text, 'Cached prompt text');
+  assert.equal(ask.snapshot.text, 'Separate answer');
+  assert.equal('attachments' in ask.getSnapshot(), false);
+  const replacementAsk = new Draft(prompt.sessionId, { kind: 'ask', requestId: 'question-1' });
+  assert.notEqual(replacementAsk.id, ask.id);
+  assert.equal(replacementAsk.snapshot.text, '');
+  for (const kind of ['plan', 'elicitation'] as const) {
+    const decision = new Draft(prompt.sessionId, { kind, requestId: 'other-request' });
+    const tree = h.render(composerComponent(frontend), { draft: decision, operation: kind, disabled: false });
+    assert.equal(descendants(tree).some(element => String(element.props.className).startsWith('cf-')), false);
+    assert.equal(fileScopes.has(decision.reference), false);
+  }
+  const restored = h.render(composerComponent(frontend), { draft: prompt, operation: 'prompt', disabled: false });
+  assert.equal(descendants(restored).filter(element => element.props.className === 'cf-row').length, 1);
+  assert.equal(h.calls.filter(call => call.init?.method === 'POST').length, 1);
+  h.unmount(); frontend.dispose?.();
+});
+
+test('ready row removal updates its schema and discards only this activation’s never-submitted upload', async () => {
+  const h = harness();
+  h.context.request = async (path, init) => {
+    h.calls.push({ path, init });
+    if (init?.method === 'POST') return Response.json({
+      fileId, attachment: { type: 'file', path: `/data/files/${fileId}/ready/body.txt`, displayName: 'Owned' },
+    });
+    return new Response(null, { status: init?.method === 'DELETE' ? 204 : 200 });
+  };
+  const frontend = await activate(h.context);
+  const draft = new Draft();
+  draft.snapshot = { ...draft.snapshot, unconfirmed: true };
+  draft.appendAttachments([{ id: 'restored', value: { type: 'file', path: '/fixture/restored', displayName: 'Restored' } }]);
+  selectFiles(frontend, { draft, operation: 'prompt', disabled: false }, [new File(['a'], 'Owned')]);
+  await settle();
+  const render = () => h.render(composerComponent(frontend), { draft, operation: 'prompt', disabled: false });
+  const first = render();
+  click(descendants(first).find(element => element.props['aria-label'] === '移除 Restored')!);
+  assert.equal(h.calls.some(call => call.init?.method === 'DELETE'), false);
+  click(descendants(render()).find(element => element.props['aria-label'] === '移除 Owned')!);
+  assert.deepEqual(draft.fileSnapshot.attachments, []);
+  assert.equal(h.calls.filter(call => call.init?.method === 'DELETE').length, 1,
+    'an unrelated old unconfirmed notice does not mark the new upload as submitted');
+  assert.equal('attachments' in draft.getSnapshot(), false);
+  h.unmount(); frontend.dispose?.();
+});
+
+test('editor paste and drop compose inherited handlers and consume files once while mixed text remains native', async () => {
+  for (const source of ['onPaste', 'onDrop'] as const) {
+    for (const mixed of [false, true]) {
+      const h = harness();
+      const frontend = await activate(h.context);
+      const draft = new Draft();
+      draft.editText('Mixed clipboard text stays in the native editor');
+      let inherited = 0;
+      const props: ComposerEditorProps = {
+        ...composerProps(frontend, { draft: draft.reference, operation: 'prompt', disabled: false }),
+        [source]: () => { inherited++; },
+      };
+      const middleware = frontend.components!.find(item => item.boundary === 'composerEditor')!;
+      const Enhanced = middleware.wrap(enhanceEditor(frontend));
+      const row = h.render(Enhanced, props);
+      const callback = row.props[source] as (event: ReturnType<typeof fileEvent>) => void;
+      const files = [new File(['first'], 'first.txt'), new File(['second'], 'second.txt')];
+      const event = fileEvent(files, mixed ? { 'text/plain': 'native clipboard text' } : {});
+      callback(event);
+      assert.equal(event.defaultPrevented, source === 'onDrop' || !mixed);
+      assert.equal(inherited, 1);
+      assert.equal(draft.blocks, 1);
+      assert.equal(h.calls.length, 2);
+      assert.equal(h.calls[0]!.init!.body, files[0]);
+      assert.equal(h.calls[1]!.init!.body, files[1]);
+      assert.equal(draft.snapshot.text, 'Mixed clipboard text stays in the native editor');
+      const empty = fileEvent([], { 'text/plain': 'ordinary text' });
+      callback(empty);
+      assert.equal(empty.defaultPrevented, false);
+      assert.equal(inherited, 2, 'ordinary text invokes inherited DOM behavior once');
+      draft.snapshot = { ...draft.snapshot, pending: true };
+      callback(fileEvent(files));
+      assert.equal(inherited, 3);
+      assert.equal(h.calls.length, 2);
+      h.unmount(); frontend.dispose?.();
+    }
+  }
+});
+
+test('inherited editor cancellation wins, callback failures are reported, and disabled file drops never upload', async () => {
+  const h = harness();
+  const frontend = await activate(h.context);
+  const draft = new Draft();
+  const props = composerProps(frontend, { draft, operation: 'prompt', disabled: false });
+  for (const name of ['onPaste', 'onDrop', 'onDragOver'] as const) {
+    let inherited = 0;
+    const handler = editorHandlers(frontend, {
+      ...props, [name]: (event: ReturnType<typeof fileEvent>) => { inherited++; event.preventDefault(); },
+    })[name]!;
+    const event = fileEvent([new File(['a'], 'a')]);
+    handler(event);
+    assert.equal(inherited, 1);
+    assert.equal(event.dataTransfer.dropEffect, 'none');
+    assert.equal(h.calls.length, 0);
+    const failure = new Error(`${name} fixture failure`);
+    const broken = editorHandlers(frontend, { ...props, [name]: () => { throw failure; } })[name]!;
+    assert.doesNotThrow(() => broken(fileEvent([new File(['a'], 'a')])));
+    assert.equal(h.errors.at(-1), failure);
+  }
+  for (const disabled of [true, false]) {
+    draft.snapshot = { ...draft.snapshot, pending: !disabled };
+    const handlers = editorHandlers(frontend, { ...props, disabled });
+    const drag = fileEvent([new File(['a'], 'a')]);
+    handlers.onDragOver!(drag);
+    assert.equal(drag.defaultPrevented, true);
+    assert.equal(drag.dataTransfer.dropEffect, 'none');
+    handlers.onDrop!(fileEvent([new File(['a'], 'a')]));
+    handlers.onPaste!(fileEvent([new File(['a'], 'a')]));
+  }
+  assert.equal(h.calls.length, 0);
+  assert.equal(draft.blocks, 0);
+  frontend.dispose?.();
+});
+
+test('file probes follow readonly host visibility and module resources do not cross activations', async () => {
+  const a = harness();
+  const b = harness();
+  a.setHost({ visible: false });
+  const first = await activate(a.context);
+  const second = await activate(b.context);
+  assert.notEqual(a.services[2]!.service, b.services[2]!.service);
+  assert.notEqual(a.services[3]!.service, b.services[3]!.service);
+  assert.notEqual(a.services[4]!.service, b.services[4]!.service);
+  const node: MarkdownNode = {
+    kind: 'link', target: './test.txt', label: 'Test',
+    origin: { sessionId: 'fixture', messageId: 'visibility' },
+  };
+  a.render(first.markdown![0]!.component, { node, fallback: 'core fallback' }); a.flushEffects();
+  assert.equal(a.calls.length, 0);
+  a.setHost({ visible: true });
+  assert.equal(a.calls.length, 1);
+  assert.equal(a.calls[0]!.init!.signal!.aborted, false);
+  a.setHost({ visible: false });
+  assert.equal(a.calls[0]!.init!.signal!.aborted, true);
+  first.dispose?.();
+  assert.equal(a.hostListeners.size, 0);
+  assert.equal(b.hostListeners.size, 1);
+  assert.deepEqual(b.disposedServices, []);
+  a.unmount();
+  second.dispose?.();
 });
 
 test('only selected pinned Lucide SVG data is shipped with complete upstream licensing', async () => {
@@ -239,12 +745,10 @@ function openFile(tree: Element) {
 test('native blob cards decode locally, reuse their URL on rerender and revoke it on change or teardown', async () => {
   const h = harness();
   const frontend = await activate(h.context);
-  const renderer = frontend.chatRenderers![0]!;
   const origin = { sessionId: 'fixture', messageId: 'blob' };
-  let node: RenderNode = { kind: 'attachment', origin, label: 'Native text',
+  let node: NativeFixture = { kind: 'attachment', origin, label: 'Native text',
     attachment: { type: 'blob', mimeType: 'text/plain', data: 'aGVsbG8=' } };
-  assert.equal(renderer.matches(node), true);
-  const renderNode = renderer.component as unknown as (props: { node: RenderNode }) => Element;
+  const renderNode = nativeComponent(frontend);
   const render = () => h.render(renderNode, { node });
   const url = (tree: Element) => String(descendants(tree).find(element => element.type === 'a')!.props.href);
   render(); h.flushEffects();
@@ -282,11 +786,9 @@ test('omitted and malformed blobs show unavailable cards without download or fab
   ]) {
     const h = harness();
     const frontend = await activate(h.context);
-    const node: RenderNode = { kind: 'attachment', origin: { sessionId: 'fixture', messageId: 'omitted' },
+    const node: NativeFixture = { kind: 'attachment', origin: { sessionId: 'fixture', messageId: 'omitted' },
       label: 'Unavailable image', attachment };
-    const renderer = frontend.chatRenderers![0]!;
-    assert.equal(renderer.matches(node), true);
-    const renderNode = renderer.component as unknown as (props: { node: RenderNode }) => Element;
+    const renderNode = nativeComponent(frontend);
     const render = () => h.render(renderNode, { node });
     render(); h.flushEffects();
     const tree = render();
@@ -303,8 +805,8 @@ test('media loads only on opening, with a fresh bounded attempt and isolated lat
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100 });
   const h = harness();
   const frontend = await activate(h.context);
-  const renderNode = frontend.chatRenderers![0]!.component as unknown as (props: { node: RenderNode }) => Element;
-  const node: RenderNode = {
+  const renderNode = nativeComponent(frontend);
+  const node: NativeFixture = {
     kind: 'attachment', origin: { sessionId: 'fixture', messageId: 'image' }, label: 'Native image',
     attachment: { type: 'blob', mimeType: 'image/png',
       data: syntheticPng },
@@ -341,99 +843,91 @@ test('media loads only on opening, with a fresh bounded attempt and isolated lat
   frontend.dispose?.();
 });
 
-test('renderers match only managed native attachments and local Markdown references', async () => {
+test('Markdown matches only local references and keeps original target, label and native provenance', async () => {
   const { context, calls } = harness();
   const frontend = await activate(context);
-  const renderer = frontend.chatRenderers![0]!;
+  const renderer = frontend.markdown![0]!;
   const origin = { sessionId: 'session', messageId: 'message', agentId: 'worker' };
-  const base: RenderNode = { kind: 'link', label: '<script>safe text</script>', origin, target: './雪%20space.png#part' };
+  const base: MarkdownNode = { kind: 'link', label: '<script>safe text</script>', origin, target: './雪%20space.png#part' };
   assert.equal(renderer.matches(base), true);
   assert.equal(renderer.matches({ ...base, kind: 'image' }), true);
   for (const target of ['https://example.test/a.png', 'javascript:alert(1)', 'data:text/html,hello', '#heading', '//other/file']) {
     assert.equal(renderer.matches({ ...base, target }), false);
   }
-  assert.equal(renderer.matches({ ...base, kind: 'attachment', attachment: { type: 'file', path: `/data/files/${fileId}/ready/body.png` } }), true);
-  assert.equal(renderer.matches({ ...base, kind: 'attachment', attachment: { type: 'file', path: `/data/files/${fileId}/identity.json` } }), false);
-  assert.equal(renderer.matches({ ...base, kind: 'attachment', attachment: { type: 'file', path: '/home/report.pdf' } }), false);
-  assert.equal(renderer.matches({ ...base, kind: 'attachment', attachment: { type: 'directory', path: `/data/files/${fileId}` } }), false);
-  const render = renderer.component as unknown as (props: { node: RenderNode }) => Element;
-  const a = render({ node: base });
-  const b = render({ node: { ...base, origin: { ...origin, agentId: 'different-display-alias' } } });
+  const render = renderer.component as unknown as (props: MarkdownRendererProps) => Element;
+  const fallback = context.react.createElement('a', { href: 'https://example.test/' }, 'safe fallback');
+  const a = render({ node: base, fallback });
+  const b = render({ node: { ...base, origin: { ...origin, agentId: 'different-display-alias' } }, fallback });
   assert.equal(a.type, b.type, 'component definitions stay stable across message deltas');
   assert.equal(a.props.url, b.props.url);
   assert.equal(a.props.name, base.label, 'display text is not interpreted as HTML');
+  assert.equal(render({ node: { ...base, target: 'https://example.test/' }, fallback }), fallback);
+  assert.match(String(a.props.url), /\/cockpit\/_modules\/cockpit-file\/[^/]+\/api\/messages\//);
+  assert.equal(base.target, './雪%20space.png#part', 'the original target is not normalized in place');
   assert.equal(calls.length, 0, 'rendering URLs never POSTs capture');
   frontend.dispose?.();
 });
 
-test('the file picker captures its original draft before a session-changing rerender', async () => {
+test('the module picker opens synchronously and retains its canonical draft across unmount and session switches', async () => {
   const h = harness();
   const frontend = await activate(h.context) as ModuleFrontend;
-  const blocks: string[] = [];
-  const draft = (sessionId: string): ModuleDraft => ({
-    sessionId,
-    getSnapshot: () => ({ text: '', attachments: [], pending: false }),
-    subscribe: () => () => {},
-    appendAttachments: () => {},
-    removeAttachment: () => {},
-    editText: () => {},
-    block: () => { blocks.push(sessionId); return () => {}; },
-  });
-  const original: ComposerContext = { draft: draft('original'), disabled: false, operation: 'prompt' };
-  const next: ComposerContext = { ...original, draft: draft('next') };
-  const render = frontend.composerActions![0]!.component as unknown as (context: ComposerContext) => Element;
-  const first = render(original);
-  let clicked = 0;
-  h.refs[0]!.current = { click: () => clicked++ };
-  (children(first)[0]!.props.onClick as () => void)();
-  assert.equal(clicked, 1, 'the picker opens in the button click stack');
-  h.resetHooks();
-  const rerender = render(next);
-  const input = children(rerender)[1]!;
+  const original = new Draft('original');
+  const next = new Draft('next');
+  const props = composerProps(frontend, { draft: original.reference, disabled: false, operation: 'prompt' });
+  const first = h.render(enhanceComposer(frontend), props);
+  const previous = nativeInputs.length;
+  click(descendants(first).find(element => element.props['aria-label'] === '添加文件')!);
+  const picker = nativeInputs.at(-1)!;
+  assert.equal(nativeInputs.length, previous + 1);
+  assert.equal(picker.clicks, 1, 'the picker opens in the button click stack');
+  assert.equal(picker.type, 'file');
+  assert.equal(picker.multiple, true);
+  assert.equal(descendants(first).some(element => element.type === 'input'), false, 'the input is detached, not a hidden host slot');
+  h.unmount();
+  h.setHost({ sessionId: next.sessionId });
+  h.render(enhanceComposer(frontend), { ...props, draft: next.reference });
   const file = new File(['content'], 'a.txt');
-  const target = { files: [file], value: 'selected' };
-  (input.props.onChange as (event: unknown) => void)({ currentTarget: target });
-  assert.equal(target.value, '');
+  picker.files = [file];
+  picker.dispatchEvent(new Event('change'));
   assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0]!.init!.body, file);
-  assert.deepEqual(blocks, ['original']);
+  assert.equal(original.blocks, 1);
+  assert.equal(next.blocks, 0);
+  assert.equal('appendAttachments' in props.draft, false);
   frontend.dispose?.();
 });
 
-test('composerAbove preserves native attachment visibility and reports rejected removals', async () => {
+test('attachment middleware preserves unknown native values and core actions without a placeholder wrapper', async () => {
   const h = harness();
-  const { context, errors } = h;
-  const frontend = await activate(context);
-  const draft: ModuleDraft = {
-    sessionId: 'session',
-    getSnapshot: () => ({
-      text: '', pending: false,
-      attachments: [
-        { id: 'restored', value: { type: 'file', path: `/data/files/${fileId}/ready/body.pdf`, displayName: 'Restored report' } },
-        { id: 'external', value: { type: 'file', path: '/home/native.txt', displayName: 'Native file' } },
-        { id: 'directory', value: { type: 'directory', path: '/home/project', displayName: 'Project directory' } },
-      ],
-    }),
-    subscribe: () => () => {},
-    appendAttachments: () => {},
-    removeAttachment: id => {
-      if (id === 'external') throw new Error('Attachment belongs to another module');
-    },
-    editText: () => {},
-    block: () => () => {},
-  };
-  const render = frontend.composerAbove![0]!.component as unknown as (props: ComposerContext) => Element;
-  const tree = h.render(render, { draft, operation: 'prompt', disabled: false });
-  const rendered = JSON.stringify(tree);
-  for (const name of ['Restored report', 'Native file', 'Project directory']) {
-    assert.ok(rendered.includes(name), `${name} must not disappear behind the module's composerAbove contribution`);
+  const frontend = await activate(h.context);
+  const middleware = frontend.components!.find(item => item.boundary === 'attachment')!;
+  const Base = () => null;
+  const Enhanced = middleware.wrap(Base) as (props: AttachmentProps) => unknown;
+  const action = h.context.react.createElement('button', { disabled: true, 'aria-label': 'core remove' });
+  for (const attachment of [
+    { type: 'file' as const, path: '/home/native.txt' },
+    { type: 'file' as const, path: `/data/files/${fileId}/identity.json` },
+    { type: 'directory' as const, path: '/home/project' },
+  ]) {
+    const props: AttachmentProps = {
+      index: 0, attachment, label: 'Native attachment', children: 'native content', actions: action,
+    };
+    const tree = Enhanced(props) as Element;
+    assert.equal(tree.type, Base);
+    assert.equal(tree.props.index, props.index);
+    assert.equal(tree.props.children, props.children);
+    assert.equal(tree.props.actions, action);
   }
-  assert.doesNotMatch(rendered, /\/home\/native|\/home\/project/);
-  const remove = descendants(tree).find(element => element.props['aria-label'] === '移除 Native file')!;
-  (remove.props.onClick as () => void)();
-  assert.equal(errors.length, 1);
-  assert.match(String(errors[0]), /belongs to another module/);
-  assert.equal(draft.getSnapshot().attachments.length, 3);
+  const tree = h.render(attachmentComponent(frontend), {
+    index: 0, attachment: { type: 'blob', mimeType: 'text/plain', data: 'YQ==' },
+    label: 'Supported', children: 'core fallback', actions: action,
+  });
+  assert.equal(tree.type, 'span');
+  assert.equal(tree.props.className, 'cf-row', 'replacement is the existing file row itself');
+  const coreAction = descendants(tree).find(element => element.props['aria-label'] === 'core remove')!;
+  assert.equal(coreAction.props.disabled, true);
+  assert.equal(h.calls.length, 0);
+  h.unmount();
   frontend.dispose?.();
 });
 
@@ -441,7 +935,7 @@ test('attachment action is an accessible borderless icon, not a boxed label', as
   const h = harness();
   const frontend = await activate(h.context);
   const draft = new Draft();
-  const tree = h.render(frontend.composerActions![0]!.component, { draft, operation: 'prompt', disabled: false });
+  const tree = h.render(composerComponent(frontend), { draft, operation: 'prompt', disabled: false });
   const button = descendants(tree).find(element => element.type === 'button')!;
   assert.equal(button.props.className, 'ck-icon-button');
   assert.equal(button.props['aria-label'], '添加文件');
@@ -453,8 +947,10 @@ test('attachment action is an accessible borderless icon, not a boxed label', as
   assert.equal(icon.props.strokeLinecap, 'round');
   assert.equal(icon.props.strokeLinejoin, 'round');
   assert.equal(descendants(button).some(element => element.type === 'span'), false);
-  const disabled = h.render(frontend.composerActions![0]!.component, { draft, operation: 'ask', disabled: false });
-  assert.equal(descendants(disabled).find(element => element.type === 'button')!.props.disabled, true);
+  const ask = new Draft(draft.sessionId, { kind: 'ask', requestId: 'question' });
+  const answer = h.render(composerComponent(frontend), { draft: ask, operation: 'ask', disabled: false });
+  assert.equal(descendants(answer).some(element => element.props['aria-label'] === '添加文件'), false);
+  assert.equal(descendants(answer).some(element => element.props['aria-label'] === 'native send'), true);
   frontend.dispose?.();
 });
 
@@ -467,10 +963,10 @@ test('each selection has its own row and preview resource, honest progress and i
   };
   const frontend = await activate(h.context);
   const draft = new Draft();
-  const composer: ComposerContext = { draft, operation: 'prompt', disabled: false };
+  const composer: ComposerTarget = { draft, operation: 'prompt', disabled: false };
   const file = new File([Buffer.from(syntheticPng, 'base64')], '同名-很长的图片-'.repeat(12) + '.png', { type: 'image/png' });
-  frontend.fileInput![0]!.receive([file, file], composer);
-  const render = () => h.render(frontend.composerAbove![0]!.component, composer);
+  assert.equal(selectFiles(frontend, composer, [file, file]), true);
+  const render = () => h.render(composerComponent(frontend), composer);
   render(); h.flushEffects();
   let tree = render();
   assert.equal(descendants(tree).filter(element => element.type === 'img').length, 0);
@@ -507,7 +1003,7 @@ test('each selection has its own row and preview resource, honest progress and i
   responses[1]!(Response.json({ error: 'Synthetic network failure' }, { status: 503 }));
   await settle();
   tree = render(); h.flushEffects();
-  assert.equal(draft.snapshot.attachments.length, 0, 'late success of a removed item is ignored');
+  assert.equal(draft.fileSnapshot.attachments.length, 0, 'late success of a removed item is ignored');
   assert.match(JSON.stringify(tree), /Synthetic network failure/);
   assert.equal(descendants(tree).filter(element => element.type === 'progress').length, 0);
   assert.equal(descendants(tree).filter(element => element.props.role === 'alert').length, 1);
@@ -522,7 +1018,7 @@ test('each selection has its own row and preview resource, honest progress and i
   await settle();
   render(); h.flushEffects();
   assert.equal(draft.blocks, 0);
-  assert.equal(draft.snapshot.attachments.length, 1);
+  assert.equal(draft.fileSnapshot.attachments.length, 1);
   await assert.rejects(fetch(originalUrls[1]!));
   assert.equal(h.calls[4]!.init!.method, 'HEAD');
   responses[4]!(new Response(null, { headers: { 'content-type': 'image/png', 'content-length': `${file.size}` } }));
@@ -549,26 +1045,24 @@ test('send pending disables upload, picker, ready removal, pending removal and r
   const frontend = await activate(h.context);
   const draft = new Draft();
   draft.appendAttachments([{ id: 'restored', value: { type: 'directory', path: '/fixture', displayName: 'Ready' } }]);
-  const composer: ComposerContext = { draft, disabled: false, operation: 'prompt' };
-  frontend.fileInput![0]!.receive([new File(['pending'], 'Uploading')], composer);
-  frontend.fileInput![0]!.receive([new File([new Uint8Array(100_001)], 'Failed')], composer);
+  const composer: ComposerTarget = { draft, disabled: false, operation: 'prompt' };
+  selectFiles(frontend, composer, [new File(['pending'], 'Uploading')]);
+  selectFiles(frontend, composer, [new File([new Uint8Array(100_001)], 'Failed')]);
   const render = () => {
-    const action = h.render(frontend.composerActions![0]!.component, composer);
-    const rows = h.render(frontend.composerAbove![0]!.component, composer);
-    return [...descendants(action), ...descendants(rows)];
+    return descendants(h.render(composerComponent(frontend), composer));
   };
   const unlocked = render();
   assert.ok(unlocked.some(element => element.props['aria-label'] === '重新上传 Failed'));
   draft.snapshot = { ...draft.snapshot, pending: true };
   const locked = render();
-  for (const label of ['添加文件', '选择文件', '移除 Ready', '移除 Uploading', '移除 Failed', '重新上传 Failed']) {
+  for (const label of ['添加文件', '移除 Ready', '移除 Uploading', '移除 Failed', '重新上传 Failed']) {
     assert.equal(locked.find(element => element.props['aria-label'] === label)!.props.disabled, true, label);
   }
   draft.snapshot = { ...draft.snapshot, pending: false };
   for (const element of render().filter(element => element.type === 'button' && /添加文件|移除|重新上传/.test(String(element.props['aria-label'])))) {
     assert.equal(!!element.props.disabled, false);
   }
-  assert.ok(unlocked.some(element => element.type === 'input'));
+  assert.equal(unlocked.some(element => element.type === 'input'), false, 'the module-owned picker is detached from the editor');
   h.unmount();
   frontend.dispose?.();
 });
@@ -577,18 +1071,15 @@ test('a file picker opened before sending cannot upload its late selection durin
   const h = harness();
   const frontend = await activate(h.context);
   const draft = new Draft();
-  const composer: ComposerContext = { draft, operation: 'prompt', disabled: false };
-  const tree = h.render(frontend.composerActions![0]!.component, composer);
-  const button = descendants(tree).find(element => element.type === 'button')!;
-  const input = descendants(tree).find(element => element.type === 'input')!;
-  (button.props.onClick as () => void)();
+  const composer = composerProps(frontend, { draft, operation: 'prompt', disabled: false });
+  const tree = h.render(enhanceComposer(frontend), composer);
+  click(descendants(tree).find(element => element.props['aria-label'] === '添加文件')!);
+  const picker = nativeInputs.at(-1)!;
   draft.snapshot = { ...draft.snapshot, pending: true };
-  const target = { files: [new File(['late'], 'late.txt')], value: 'selected' };
-  (input.props.onChange as (event: unknown) => void)({ currentTarget: target });
-  assert.equal(target.value, '');
+  picker.files = [new File(['late'], 'late.txt')];
+  picker.dispatchEvent(new Event('change'));
   assert.equal(h.calls.length, 0);
   assert.equal(draft.blocks, 0);
-  assert.match(String(h.errors[0]), /正在提交/);
   h.unmount();
   frontend.dispose?.();
 });
@@ -596,9 +1087,9 @@ test('selection preview URLs release on view unmount and module stop without can
   const h = harness();
   const frontend = await activate(h.context);
   const draft = new Draft();
-  const composer: ComposerContext = { draft, operation: 'prompt', disabled: false };
-  frontend.fileInput![0]!.receive([new File([Buffer.from(syntheticPng, 'base64')], 'pixel.png', { type: 'image/png' })], composer);
-  const render = () => h.render(frontend.composerAbove![0]!.component, composer);
+  const composer: ComposerTarget = { draft, operation: 'prompt', disabled: false };
+  selectFiles(frontend, composer, [new File([Buffer.from(syntheticPng, 'base64')], 'pixel.png', { type: 'image/png' })]);
+  const render = () => h.render(composerComponent(frontend), composer);
   render(); h.flushEffects();
   openFile(render()); render(); h.flushEffects();
   const first = String(descendants(render()).find(element => element.type === 'img')!.props.src);
@@ -613,7 +1104,8 @@ test('selection preview URLs release on view unmount and module stop without can
   h.signal.abort();
   await assert.rejects(fetch(second));
   assert.equal(h.calls[0]!.init!.signal!.aborted, true);
-  assert.equal(draft.blocks, 0);
+  assert.equal(draft.blocks, 0, 'module loss releases its generic leases without host file fallback');
+  assert.deepEqual(draft.getSnapshot().blocks, []);
   assert.equal(h.calls.length, 1, 'teardown does not delete originals');
   h.unmount();
 });
@@ -628,8 +1120,8 @@ test('draft and native attachments share rows and canonical URLs without backgro
   const draft = new Draft();
   const attachment = { type: 'file' as const, path: `/data/files/${fileId}/ready/body.png`, displayName: 'Restored pixel' };
   draft.appendAttachments([{ id: 'restored', value: attachment }]);
-  const composer: ComposerContext = { draft, operation: 'prompt', disabled: false };
-  const component = frontend.composerAbove![0]!.component;
+  const composer: ComposerTarget = { draft, operation: 'prompt', disabled: false };
+  const component = composerComponent(frontend);
   h.render(component, composer); h.flushEffects(); await settle();
   let draftTree = h.render(component, composer);
   const card = descendants(draftTree).find(element => element.props.className === 'cf-row')!;
@@ -639,8 +1131,8 @@ test('draft and native attachments share rows and canonical URLs without backgro
   const image = descendants(draftTree).find(element => element.type === 'img')!;
   assert.equal(image.props.src, `${apiBase}/files/${fileId}/body.png`);
   (image.props.onLoad as () => void)();
-  const node: RenderNode = { kind: 'attachment', origin: { sessionId: 'fixture', messageId: 'restored' }, label: attachment.displayName, attachment };
-  const chat = h.render(frontend.chatRenderers![0]!.component, { node });
+  const node: NativeFixture = { kind: 'attachment', origin: { sessionId: 'fixture', messageId: 'restored' }, label: attachment.displayName, attachment };
+  const chat = h.render(nativeComponent(frontend), { node });
   h.flushEffects();
   assert.equal(chat.props.className, card.props.className);
   assert.equal(descendants(chat).some(element => element.type === 'img'), false);
@@ -655,9 +1147,9 @@ test('draft and native attachments share rows and canonical URLs without backgro
 test('a row opens an explicitly closable native dialog and a changed resource closes it', async () => {
   const h = harness();
   const frontend = await activate(h.context);
-  let node: RenderNode = { kind: 'attachment', origin: { sessionId: 'fixture', messageId: 'preview' }, label: 'Synthetic pixel',
+  let node: NativeFixture = { kind: 'attachment', origin: { sessionId: 'fixture', messageId: 'preview' }, label: 'Synthetic pixel',
     attachment: { type: 'blob', mimeType: 'image/png', data: syntheticPng } };
-  const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+  const render = () => h.render(nativeComponent(frontend), { node });
   render(); h.flushEffects();
   let tree = render();
   assert.equal(descendants(tree).some(element => element.type === 'dialog'), false);
@@ -708,11 +1200,11 @@ test('Markdown SVG references fetch metadata only until opened and preview witho
     return new Response(null, { headers: { 'content-type': 'image/svg+xml', 'content-length': '200' } });
   };
   const frontend = await activate(h.context);
-  const node: RenderNode = {
+  const node: MarkdownNode = {
     kind: 'image', origin: { sessionId: 'fixture', messageId: 'svg' },
     target: 'files/diagram.svg', label: 'Diagram',
   };
-  const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+  const render = () => h.render(frontend.markdown![0]!.component, { node, fallback: 'safe fallback' });
   render(); h.flushEffects(); await settle();
   let tree = render();
   assert.equal(tree.props.className, 'cf-reference');
@@ -733,9 +1225,9 @@ test('Markdown SVG references fetch metadata only until opened and preview witho
 test('module stop closes its body-mounted modal and a stale trigger cannot reopen it', async () => {
   const h = harness();
   const frontend = await activate(h.context);
-  const node: RenderNode = { kind: 'attachment', origin: { sessionId: 'fixture', messageId: 'stop-dialog' },
+  const node: NativeFixture = { kind: 'attachment', origin: { sessionId: 'fixture', messageId: 'stop-dialog' },
     label: 'Synthetic details', attachment: { type: 'blob', mimeType: 'text/plain', data: 'aGVsbG8=' } };
-  const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+  const render = () => h.render(nativeComponent(frontend), { node });
   render(); h.flushEffects();
   const trigger = descendants(render()).find(element => element.props['aria-haspopup'] === 'dialog')!;
   (trigger.props.onClick as () => void)();
@@ -757,9 +1249,9 @@ test('audio/video controls stay behind an explicit play action and unsafe docume
   for (const mimeType of ['audio/wav', 'video/mp4', 'application/pdf', 'text/html']) {
     const h = harness();
     const frontend = await activate(h.context);
-    const node: RenderNode = { kind: 'attachment', origin: { sessionId: 'fixture', messageId: mimeType }, label: 'Synthetic media',
+    const node: NativeFixture = { kind: 'attachment', origin: { sessionId: 'fixture', messageId: mimeType }, label: 'Synthetic media',
       attachment: { type: 'blob', mimeType, data: 'c3ludGhldGlj' } };
-    const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+    const render = () => h.render(nativeComponent(frontend), { node });
     render(); h.flushEffects();
     let tree = render();
     assert.equal(descendants(tree).some(element => ['iframe', 'object', 'embed', 'dialog'].includes(String(element.type))), false);
@@ -811,9 +1303,9 @@ test('full names and errors are accessible on touch while all tile information a
     const h = harness();
     const frontend = await activate(h.context);
     const draft = new Draft();
-    const composer: ComposerContext = { draft, disabled: false, operation: 'prompt' };
-    frontend.fileInput![0]!.receive([new File([new Uint8Array(100_001)], name)], composer);
-    const render = () => h.render(frontend.composerAbove![0]!.component, composer);
+    const composer: ComposerTarget = { draft, disabled: false, operation: 'prompt' };
+    selectFiles(frontend, composer, [new File([new Uint8Array(100_001)], name)]);
+    const render = () => h.render(composerComponent(frontend), composer);
     let tree = render();
     const card = descendants(tree).find(element => element.props.className === 'cf-row')!;
     const info = descendants(card).find(element => element.props.className === 'cf-row-name')!;
@@ -848,11 +1340,11 @@ test('full names and errors are accessible on touch while all tile information a
 test('one row button owns visible content, actions are siblings and late dialog close stays scoped', async () => {
   const h = harness();
   const frontend = await activate(h.context);
-  let node: RenderNode = {
+  let node: NativeFixture = {
     kind: 'attachment', origin: { sessionId: 'fixture', messageId: 'card-preview' }, label: 'Long image name.png',
     attachment: { type: 'blob', mimeType: 'image/png', data: syntheticPng },
   };
-  const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+  const render = () => h.render(nativeComponent(frontend), { node });
   render(); h.flushEffects();
   let tree = render();
   const trigger = descendants(tree).find(element => element.props.className === 'ck-button cf-row-open')!;
@@ -900,9 +1392,9 @@ test('a card opened before image metadata arrives becomes the preview rather tha
   let respond!: (response: Response) => void;
   h.context.request = () => new Promise<Response>(resolve => { respond = resolve; });
   const frontend = await activate(h.context);
-  const node: RenderNode = { kind: 'image', origin: { sessionId: 'fixture', messageId: 'late-metadata' },
+  const node: MarkdownNode = { kind: 'image', origin: { sessionId: 'fixture', messageId: 'late-metadata' },
     target: './image.svg', label: 'Loading image' };
-  const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+  const render = () => h.render(frontend.markdown![0]!.component, { node, fallback: 'safe fallback' });
   let tree = render(); h.flushEffects();
   openFile(tree);
   tree = render();
@@ -928,9 +1420,9 @@ test('Markdown links and images stay inline regardless of labels, line breaks or
     h.context.request = async () => new Response(null, { headers: { 'content-type': 'application/octet-stream', 'content-length': '42' } });
     const frontend = await activate(h.context);
     const name = '报告-'.repeat(100) + 'report.py:128';
-    const node: RenderNode = { kind, origin: { sessionId: 'fixture', messageId: kind },
+    const node: MarkdownNode = { kind, origin: { sessionId: 'fixture', messageId: kind },
       target: 'report.py#L128', label: name };
-    const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+    const render = () => h.render(frontend.markdown![0]!.component, { node, fallback: 'safe fallback' });
     let tree = render(); h.flushEffects(); await settle();
     tree = render();
     assert.equal(tree.props.className, 'cf-reference');
@@ -957,9 +1449,9 @@ test('inline errors retain one link and expose the complete cause and retry only
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100 });
   const h = harness();
   const frontend = await activate(h.context);
-  const node: RenderNode = { kind: 'image', origin: { sessionId: 'fixture', messageId: 'inline-timeout' },
+  const node: MarkdownNode = { kind: 'image', origin: { sessionId: 'fixture', messageId: 'inline-timeout' },
     target: './unresolved.png', label: 'Same name' };
-  const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+  const render = () => h.render(frontend.markdown![0]!.component, { node, fallback: 'safe fallback' });
   render(); h.flushEffects();
   t.mock.timers.tick(5001);
   const failed = render();
@@ -979,9 +1471,9 @@ test('retry hands focus to the persistent close control before replacing its own
   const h = harness();
   h.context.request = async () => new Response(null, { status: 503 });
   const frontend = await activate(h.context);
-  const node: RenderNode = { kind: 'link', origin: { sessionId: 'fixture', messageId: 'retry-focus' },
+  const node: MarkdownNode = { kind: 'link', origin: { sessionId: 'fixture', messageId: 'retry-focus' },
     target: './report.txt', label: 'Retry target' };
-  const render = () => h.render(frontend.chatRenderers![0]!.component, { node });
+  const render = () => h.render(frontend.markdown![0]!.component, { node, fallback: 'safe fallback' });
   render(); h.flushEffects(); await settle();
   openFile(render());
   const dialog = descendants(render()).find(element => element.type === 'dialog')!;

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { ComposerContext, DraftAttachment, ModuleDraft, ModuleDraftSnapshot } from '@cockpit/module-api';
+import type {
+  FileComposerContext, FileAttachment, FileDraft, FileDraftSnapshot,
+} from './file-draft.ts';
 import { FileProbes, formatBytes, previewKind, UploadStore } from './file-state.ts';
 import type { ProbeClock } from './file-state.ts';
 
@@ -10,13 +12,15 @@ const fileId = (name: string) => `f_${Buffer.from(name).toString('hex').padEnd(6
 const fileUrl = `${apiBase}/files/${fileId('abc')}/body.png`;
 const settle = () => new Promise<void>(resolve => setImmediate(resolve));
 
-class Draft implements ModuleDraft {
+class Draft implements FileDraft {
+  readonly id = crypto.randomUUID();
   readonly sessionId: string;
-  snapshot: ModuleDraftSnapshot = { text: '', attachments: [], pending: false };
+  readonly purpose = { kind: 'prompt' } as const;
+  snapshot: FileDraftSnapshot = { text: '', attachments: [], blocks: [], hasContent: false, revision: 0, pending: false, unconfirmed: false };
   listeners = new Set<() => void>();
   blocks = 0;
   releases = 0;
-  appended: DraftAttachment[][] = [];
+  appended: FileAttachment[][] = [];
 
   constructor(id: string) { this.sessionId = id; }
   getSnapshot() { return this.snapshot; }
@@ -24,7 +28,7 @@ class Draft implements ModuleDraft {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
-  appendAttachments(values: readonly DraftAttachment[]) {
+  appendAttachments(values: readonly FileAttachment[]) {
     const replaced = new Set(values.map(item => item.id));
     assert.equal(replaced.size, values.length, 'incoming attachment IDs must be unique');
     assert.ok(values.every(item => typeof item.id === 'string' && item.id.length > 0));
@@ -55,7 +59,7 @@ class Draft implements ModuleDraft {
   private emit() { for (const listener of this.listeners) listener(); }
 }
 
-function composer(draft: ModuleDraft, operation: ComposerContext['operation'] = 'prompt'): ComposerContext {
+function composer(draft: FileDraft, operation: FileComposerContext['operation'] = 'prompt'): FileComposerContext {
   return { draft, operation, disabled: false };
 }
 
@@ -96,7 +100,7 @@ test('ordered uploads hold the captured draft guard across unmount and session s
   const unmount = store.subscribe(a, () => {});
   const first = new File(['first'], 'first.txt', { type: 'text/plain' });
   const second = new File(['second'], 'second.txt');
-  store.receive([first, second], composer(a));
+  assert.equal(store.receive([first, second], composer(a)), true);
   assert.equal(a.blocks, 1);
   assert.equal(calls.length, 2);
   assert.equal(calls[0]!.init!.body, first);
@@ -222,7 +226,7 @@ test('reordering touches only later owned successes and keeps other drafts, modu
   const { store, calls } = uploadHarness();
   const draft = new Draft('session');
   const other = new Draft('other-session');
-  const foreign: DraftAttachment = { id: 'other-module', value: { type: 'file', path: '/synthetic/foreign' } };
+  const foreign: FileAttachment = { id: 'other-module', value: { type: 'file', path: '/synthetic/foreign' } };
   const releaseOtherModule = draft.block();
   store.receive([new File(['prefix'], 'prefix')], composer(draft));
   calls[0]!.response.resolve(uploaded('prefix'));
@@ -259,12 +263,16 @@ test('reordering touches only later owned successes and keeps other drafts, modu
   store.dispose();
 });
 
-test('active jobs keep their original draft handle when the same session is presented again', async () => {
+test('draft lifetimes in the same session keep independent uploads, guards and results', async () => {
   const { store, calls } = uploadHarness();
   const original = new Draft('session');
   const replacement = new Draft('session');
   store.receive([new File(['a'], 'a'), new File(['b'], 'b')], composer(original));
   store.subscribe(replacement, () => {});
+  assert.deepEqual(store.snapshot(replacement), { items: [] });
+  assert.equal(store.receive([new File(['c'], 'c')], composer(replacement)), true);
+  assert.equal(original.blocks, 1);
+  assert.equal(replacement.blocks, 1);
   calls[1]!.response.resolve(uploaded('second'));
   await settle();
   calls[0]!.response.resolve(uploaded('first'));
@@ -272,6 +280,11 @@ test('active jobs keep their original draft handle when the same session is pres
   assert.deepEqual(original.snapshot.attachments.map(item => item.value.displayName), ['first', 'second']);
   assert.equal(original.blocks, 0);
   assert.deepEqual(replacement.snapshot.attachments, []);
+  assert.equal(replacement.blocks, 1);
+  calls[2]!.response.resolve(uploaded('third'));
+  await settle();
+  assert.deepEqual(replacement.getSnapshot().attachments.map(item => item.value.displayName), ['third']);
+  assert.deepEqual(original.snapshot.attachments.map(item => item.value.displayName), ['first', 'second']);
   assert.equal(replacement.blocks, 0);
   store.dispose();
 });
@@ -279,7 +292,7 @@ test('active jobs keep their original draft handle when the same session is pres
 test('size limit failures remain explicit and blocked until removed', () => {
   const { store, calls } = uploadHarness({ maxBytes: 1 });
   const draft = new Draft('session');
-  store.receive([new File(['too big'], 'large')], composer(draft));
+  assert.equal(store.receive([new File(['too big'], 'large')], composer(draft)), true, 'failed selections are retained behind a module guard');
   assert.equal(calls.length, 0);
   assert.equal(store.snapshot(draft).items[0]!.status, 'failed');
   assert.match(store.snapshot(draft).items[0]!.error!, /limit/);
@@ -293,9 +306,9 @@ test('disabled, non-prompt and excessive batches do not start uploads', () => {
   const { store, calls, errors } = uploadHarness();
   const draft = new Draft('session');
   const files = [new File(['a'], 'a')];
-  store.receive(files, { ...composer(draft), disabled: true });
-  for (const operation of ['ask', 'plan', 'elicitation'] as const) store.receive(files, composer(draft, operation));
-  store.receive(Array.from({ length: 21 }, () => files[0]!), composer(draft));
+  assert.equal(store.receive(files, { ...composer(draft), disabled: true }), false);
+  for (const operation of ['ask', 'plan', 'elicitation'] as const) assert.equal(store.receive(files, composer(draft, operation)), false);
+  assert.equal(store.receive(Array.from({ length: 21 }, () => files[0]!), composer(draft)), false);
   assert.equal(calls.length, 0);
   assert.equal(draft.blocks, 0);
   assert.equal(errors.length, 5);
@@ -569,10 +582,74 @@ test('host capacity changes retain uploaded results until a draft slot is availa
 test('operation ID creation failures cannot leak an empty upload guard', () => {
   const { store, calls } = uploadHarness({ operationId: () => { throw new Error('Unavailable'); } });
   const draft = new Draft('session');
-  store.receive([new File(['a'], 'a')], composer(draft));
+  assert.equal(store.receive([new File(['a'], 'a')], composer(draft)), false);
   assert.equal(draft.blocks, 0);
   assert.equal(calls.length, 0);
   assert.match(store.snapshot(draft).error!, /secure browser connection/);
+  store.dispose();
+});
+
+test('handoff is declined for empty, revoked or unguarded selections', () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  assert.equal(store.receive([], composer(draft)), false);
+  draft.block = () => { throw new Error('Draft binding was revoked'); };
+  assert.throws(() => store.receive([new File(['a'], 'a')], composer(draft)), /revoked/);
+  assert.equal(calls.length, 0);
+  assert.deepEqual(store.snapshot(draft), { items: [] });
+  store.dispose();
+  assert.equal(store.receive([new File(['b'], 'b')], composer(draft)), false);
+  assert.equal(calls.length, 0, 'a declined handoff never starts an HTTP upload');
+});
+
+test('unknown submission retains exposed originals without claiming later uploads were submitted', async () => {
+  const { store, calls } = uploadHarness();
+  const draft = new Draft('session');
+  store.receive([new File(['a'], 'a')], composer(draft));
+  calls[0]!.response.resolve(uploaded('first'));
+  await settle();
+  draft.setPending(true);
+  draft.snapshot = { ...draft.snapshot, unconfirmed: true };
+  draft.setPending(false);
+  store.removeAttachment(draft, 'cf-upload:operation-1');
+  assert.equal(calls.length, 1, 'an unknown send outcome never becomes permission to discard');
+  store.receive([new File(['b'], 'b')], composer(draft));
+  calls[1]!.response.resolve(uploaded('second'));
+  await settle();
+  store.removeAttachment(draft, 'cf-upload:operation-2');
+  assert.equal(calls.length, 3, 'a new upload was not part of the earlier uncertain submission');
+  assert.equal(calls[2]!.path, '/uploads/operation-2');
+  calls[2]!.response.resolve(new Response(null, { status: 204 }));
+  await settle();
+  store.dispose();
+});
+
+test('discard follows successful schema removal and never a rejected or ineffective action', async () => {
+  const { store, calls, errors } = uploadHarness();
+  const draft = new Draft('session');
+  store.receive([new File(['a'], 'a')], composer(draft));
+  calls[0]!.response.resolve(uploaded('first'));
+  await settle();
+  let removals = 0;
+  const remove = draft.removeAttachment.bind(draft);
+  draft.removeAttachment = () => { removals++; throw new Error('Schema update failed'); };
+  store.removeAttachment(draft, 'cf-upload:operation-1');
+  assert.equal(calls.length, 1);
+  assert.equal(draft.snapshot.attachments.length, 1);
+  draft.removeAttachment = () => {};
+  store.removeAttachment(draft, 'cf-upload:operation-1');
+  assert.equal(calls.length, 1);
+  assert.equal(errors.length, 2);
+  draft.removeAttachment = id => {
+    removals++;
+    remove(id);
+  };
+  store.removeAttachment(draft, 'cf-upload:operation-1');
+  assert.equal(removals, 2);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1]!.path, '/uploads/operation-1');
+  calls[1]!.response.resolve(new Response(null, { status: 204 }));
+  await settle();
   store.dispose();
 });
 
@@ -793,7 +870,7 @@ test('only unresolved jobs retain Files; eligibility stays bounded and never del
     store.receive([new File(['a'], 'a')], composer(draft));
     calls[start]!.response.resolve(uploaded(`file-${index}`));
     await settle();
-    const scope = internals.scopes.get(draft.sessionId)!;
+    const scope = internals.scopes.get(draft.id)!;
     assert.equal(scope.owned.size, 1);
     assert.equal(scope.entries.length, 0);
     assert.equal(scope.snapshot.items.length, 0);
@@ -808,7 +885,7 @@ test('only unresolved jobs retain Files; eligibility stays bounded and never del
   store.receive([new File(['b'], 'b')], composer(draft));
   calls[start]!.response.resolve(uploaded('saved'));
   await settle();
-  const scope = internals.scopes.get(draft.sessionId)!;
+  const scope = internals.scopes.get(draft.id)!;
   assert.ok(scope.entries.every(entry => !entry.file));
   assert.ok(scope.snapshot.items.every(entry => !entry.file), 'successful upload bytes are not kept for append retry');
   store.dispose();

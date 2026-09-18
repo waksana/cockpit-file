@@ -1,7 +1,7 @@
 # Cockpit File 文档
 
-**本次发行源码：cockpit-file 0.1.6，配合 Cockpit v0.2.0 / Module API v1 / Module UI v1。**
-本地构建、可信包安装、聊天上传和流式文件卡片已实现；发行包见 GitHub Releases。
+**当前开发源码：cockpit-file 0.1.7，配套宿主 Web API v2 / 公共 UI v1；尚未发行。**
+包/后端 API 仍为 v1。本次只迁移 Web 接入，不修改文件捕获、存储或 HTTP 行为。
 远程安装、全局文件库和旧历史补抓不在当前实现中。
 先看[构建与安装](installation.md)，再按主题了解当前契约。
 
@@ -48,7 +48,7 @@ Agent 用原生工具生成文件，正常回复 Markdown
 | 用户能力 | 聊天上传、拖拽/粘贴、附件草稿、文件卡片、支持类型的预览和下载 |
 | 文件库 | 全局总览、汉堡菜单管理页、列表搜索和管理删除接口延后 |
 | 原生附件 | 使用 SDK 已支持的 attachments，优先返回并发送服务器可读 file 路径 |
-| 草稿字段 | 模块声明写 attachments，通过本体受控方法修改；上传期间统一阻止所有发送入口 |
+| 草稿字段 | 模块注册仅适用于 prompt 的附件 schema，拥有校验/actions/原生投影/ACK；本体基础草稿不内建附件 |
 | Agent 协作 | 普通 Markdown 文件链接/图片，不强制调用上传 MCP 或输出私有标记 |
 | 观察范围 | 只处理模块实际启用后的新实时输出；不为此增加历史轮询、加载或保活 |
 | 历史 | 只读取已有快照，绝不补捕获；未捕获的旧文件引用失败，不做兼容 |
@@ -68,8 +68,8 @@ Agent 用原生工具生成文件，正常回复 Markdown
 | 参与者 | 拥有的责任 | 不承担的责任 |
 | --- | --- | --- |
 | Copilot | 原生 session、消息/历史、队列、工具执行、模型输入与上下文 | 浏览器文件库、卡片和托管下载 |
-| Cockpit 本体 | 通用模块接入、UI 插口、输入事件分派、草稿/唯一发送、原生身份与只读通知、资源释放 | 文件类型规则、复制入库、文件版本表 |
-| 文件模块 | 文件字节与元数据、流式识别、引用绑定、URL 映射、上传和读取、文件组件 | 第二份聊天历史、隐式发送、原生配置开关镜像 |
+| Cockpit 本体 | state/实际组件/Markdown 注册、通用草稿与原生发送、原生身份与只读通知、资源释放 | 文件选择调度、文件类型规则、复制入库、文件版本表 |
+| 文件模块 | 文件输入/选择器服务、文件字节与元数据、流式识别、引用绑定、URL 映射、上传和读取、文件组件 | 第二份聊天历史、隐式发送、原生配置开关镜像 |
 
 目录归属不是安全沙箱。同进程模块和同用户原生工具具有实际进程/文件能力，
 不能宣传为恶意模块隔离或所有 Agent 都无法更改托管文件的保证。
@@ -79,7 +79,7 @@ Agent 用原生工具生成文件，正常回复 Markdown
 | 文档 | 唯一负责的主题 |
 | --- | --- |
 | [本地构建与安装](installation.md) | 实际构建、模块包、启用、配置、停用与发行兼容 |
-| [前端接入契约](frontend-contract.md) | 页面/组件插口、输入事件、草稿字段、发送阻止、渲染与共享 UI |
+| [前端接入契约](frontend-contract.md) | state 扩展、组件 middleware、Markdown 渲染、草稿与共享 UI |
 | [首版后端设计](backend-design.md) | 本体后端插口、文件模块业务、最小 HTTP 能力和原生事件接线 |
 | [文件引用与地址](file-references.md) | 原生附件、助手 Markdown、消息身份、path/URL 映射和文件版本 |
 | [存储与生命周期](storage-and-lifecycle.md) | 无内容去重的存储、幂等提交、异常恢复、保留与关闭边界 |
@@ -93,11 +93,9 @@ Agent 用原生工具生成文件，正常回复 Markdown
 
 ## 5. 当前源码依据
 
-当前构建的不可变宿主 SDK 基线是
-[`waksana/cockpit@79e2946`](https://github.com/waksana/cockpit/tree/79e2946bab382ff68e3cf2a84d42827f011cbe53)，
-SDK 1.0.13、bundled runtime 1.0.83 / protocol 3。
-该提交已合入宿主 PR #19，包含原生附件、SDK 通知、公共 UI v1 和 portal，
-与 Cockpit v0.2.0 的模块 API/公共样式一致；详细 pin 见 `tooling/host-sdk.json`。
+当前构建的不可变宿主 SDK 基线由 `tooling/host-sdk.json` 唯一定义，
+包含 Web API v2 的 state、组件 middleware 和 Markdown 契约；包/后端 API 仍为 v1。
+原生 SDK 1.0.13、bundled runtime 1.0.83 / protocol 3 不因本次 Web 迁移改变。
 详细代码接点写在前后端主题文档中；这里不以旧文件系统或旧 CI 作为本次实现完成证据。
 
 相关宿主文档：
@@ -111,7 +109,7 @@ SDK 1.0.13、bundled runtime 1.0.83 / protocol 3。
 
 | 项目 | 当前实现 |
 | --- | --- |
-| 注册 | 前后端均导出 activate；前端由 context.react 使用宿主 React，不另建 SPA |
+| 注册 | 后端 activate v1 不变；Web activate v2 注册 state 服务/附件 schema、composer/原生附件 middleware 和 Markdown renderer |
 | 新输出 | 已加载会话的新 ephemeral start/delta 建立扫描状态；无新流的旧完整事件不捕获 |
 | 引用 | 行内 Markdown link/image；相对路径、绝对路径、本地 file URL；未知 cwd 的相对引用失败 |
 | 限制 | 有界扫描/引用数/工作队列/上传大小；数值和配置入口见安装文档 |
