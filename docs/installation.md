@@ -1,6 +1,6 @@
 # 下载、构建与安装
 
-**cockpit-file 0.1.7 尚未发布。** 当前源码要求配套宿主的 Web API v2，
+**cockpit-file 0.1.7 配套 Cockpit 0.2.3。** 当前源码要求配套宿主的 Web API v2，
 公共 UI v1 与 `context.createPortal`。模块包和后端 API 仍为 v1，后端行为没有随本次 Web 迁移改变。
 前端 context/返回声明必须是 API v2；不能仅凭宿主版本号或后端 API v1 推断支持。
 公共规则见宿主[模块 UI 指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md)。
@@ -10,7 +10,8 @@
 不能先运行新宿主却期待旧模块前端继续兼容。CI 不执行安装、部署或重启。
 已发行 0.1.6 的使用方法和兼容条件见其 tag 文档，不把本开发分支当成已发布资产。
 
-将来发行 0.1.7 后，下载 `cockpit-file-0.1.7.tgz` 和 `cockpit-file-0.1.7.tgz.sha256`，
+从 [v0.1.7 Release](https://github.com/waksana/cockpit-file/releases/tag/v0.1.7)
+下载 `cockpit-file-0.1.7.tgz` 和 `cockpit-file-0.1.7.tgz.sha256`，
 执行 `sha256sum -c cockpit-file-0.1.7.tgz.sha256` 后按下方安装步骤启用。
 若资产尚未发布，不能用旧包冒充这次 Web 接入迁移。
 Source code ZIP/tar 不是模块安装包。只有源码开发需要执行 SDK 准备和构建步骤。

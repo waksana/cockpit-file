@@ -1,7 +1,8 @@
-# Cockpit File 0.1.7 (development)
+# Cockpit File 0.1.7
 
-Frontend plugin migration requiring paired Cockpit Web API v2 and Module UI v1.
-Module manifest/backend API remain v1. This source is not a published or installed release.
+Frontend plugin migration paired with Cockpit **0.2.3**, Web API v2 and Module UI v1.
+Module manifest/backend API remain v1. Assets are available only after this immutable
+tag's Release workflow succeeds; publication is not installation or restart.
 
 ## Changes since 0.1.6
 
@@ -22,7 +23,7 @@ Module manifest/backend API remain v1. This source is not a published or install
 - HTTP behavior, capture/storage, native attachment delivery and preview deadlines
   are unchanged. No private DOM access, second React runtime or backend feature is added.
 
-Exact host source and exported types are pinned in `tooling/host-sdk.json`.
+Exact Cockpit 0.2.3 release source and exported types are pinned in `tooling/host-sdk.json`.
 Old frontend slots are intentionally not supported by the new host: upgrade host
 and modules together using the existing authorized cold-start procedure.
 
@@ -35,7 +36,8 @@ HTML/PDF remain download-only; SVG preview stays in image mode with restricted h
 This change does not fix HTTP/1.1 multi-tab connection starvation or change the
 existing hidden-page HEAD deadline. Queued requests can still exceed five seconds;
 their failure remains an unfinished status check rather than proof of
-a missing file. No history backfill or data migration is performed.
+a missing file. No native history backfill or server data migration is performed;
+the file schema restores its own legacy browser draft attachments.
 
 Discard eligibility is local to the originating browser activation, not a global
 reference count. A duplicated tab can restore and submit the same attachment while
