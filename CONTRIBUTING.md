@@ -49,6 +49,22 @@ installation and release notes rather than claiming the latest host release work
 
 ## Releases
 
+### Immutable installation versions
+
+Do not bump a version for every commit. Before packaging changed content for
+installation or deployment, compare with versions already delivered: changed
+package bytes require a fresh semantic version (normally the next patch for a
+compatible fix). The same module ID and version may only reproduce the same
+bytes/digest. A source SHA or digest records provenance; neither replaces the
+module version or permits replacing an installed identity.
+
+Synchronize `package.json`, `cockpit.module.json`, any embedded versions and
+applicable lockfile metadata, then update current-source compatibility and release
+notes. Preserve historical release statements. Rebuild from the final clean commit
+and verify its exact CI artifact. Never delete installed directories or force an
+installer bypass to reuse a version. Version preparation and merge do not authorize
+tags, Releases, installation or restart.
+
 The [release guide](docs/releases.md) owns version tags and the exact `.tgz`
 artifact. No npm publication, deployment or service restart is performed by CI.
 Contributions are licensed under [GPL-3.0-only](LICENSE).

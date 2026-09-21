@@ -19,7 +19,7 @@ Agent 可以照常使用 Markdown 引用文件，不需要学习额外的发送�
 
 ## 当前状态
 
-**当前准备版本为 0.1.8，要求独立 `uiSurfaceVersion: 1` 的配套宿主源码。**
+**当前准备版本为 0.1.9，要求独立 `uiSurfaceVersion: 1` 的配套宿主源码。**
 精确支持 SHA 与新增公共样式见[安装指南](docs/installation.md)，不能仅凭 UI v1 或版本号推断。
 尚未声明发布；已发布 0.1.7 安装包仍以原 tag 的 Release 资产为准。
 Web 层采用注册 state 服务、

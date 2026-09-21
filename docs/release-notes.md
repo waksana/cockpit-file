@@ -1,3 +1,12 @@
+# Cockpit File 0.1.9 (source preparation)
+
+Assign a fresh immutable package version to the merged shared-UI changes rather
+than replacing installed 0.1.8 bytes. Manifest and package metadata agree.
+The supporting host pin remains `9fd5204bda99a8bd65b2c5ef152cc47ce87837d5`;
+`uiSurfaceVersion: 1` remains required. No file business behavior, tag, Release,
+production installation or restart is introduced by this version preparation.
+Contributor guidance now explains when changed package bytes require a new version.
+
 # Cockpit File 0.1.8 (source preparation)
 
 Preview dialogs use native initial focus without redundant React autofocus.
