@@ -1,6 +1,11 @@
 # 前端接入契约
 
-**当前 0.1.8 准备源码：Web API v2，包/后端 API v1，配套 Cockpit 0.2.3，SDK pin 不变。**
+**当前 0.1.8 准备源码：Web API v2，包/后端 API v1，要求公共 UI v1 与独立 shared-surfaces v1。**
+精确配套宿主为 `9fd5204bda99a8bd65b2c5ef152cc47ce87837d5`（SDK 源码版本 0.2.6），
+不是历史同版本 Release 已具有新能力的声明。激活在注册贡献前检查
+`context.uiSurfaceVersion === 1`；缺少或不支持时明确拒绝。
+预览原生 dialog 使用 `ck-surface ck-modal`，标题与动作使用 `ck-heading` / `ck-actions`。
+文件行、内联引用、媒体尺寸、portal、打开/关闭与焦点仍由原有模块代码负责。
 实际公共类型由 Cockpit 的 `packages/module-api` 提供，模块入口是 `activate(context)`。
 前端 context 和返回声明均为 API v2，显式校验公共 UI v1 与 `context.createPortal`；
 公共 CSS/图标/兼容规范只在宿主

@@ -1,6 +1,7 @@
 # Cockpit File 文档
 
-**当前准备源码：cockpit-file 0.1.8，配套 Cockpit 0.2.3 / Web API v2 / 公共 UI v1，SDK pin 不变；未声明发布。**
+**当前准备源码：cockpit-file 0.1.8，要求 Web API v2 / 公共 UI v1 / shared-surfaces v1；未声明发布。**
+精确支持 SHA 由[安装指南](installation.md)与 `tooling/host-sdk.json` 记录，不以旧发行版本推断新能力。
 可下载包以该 tag 的 Release workflow 成功发布的资产为准，发行不自动安装。
 包/后端 API 仍为 v1。本次只迁移 Web 接入，不修改文件捕获、存储或 HTTP 行为。
 远程安装、全局文件库和旧历史补抓不在当前实现中。

@@ -3,9 +3,15 @@
 Preview dialogs use native initial focus without redundant React autofocus.
 Retry only moves focus when replacing its own focused action; native modal
 isolation, Escape and return remain unchanged. The two scoped retry continuity
-paths remain intentional. Public API/UI and the exact host SDK pin are unchanged;
-Cockpit 0.2.3 remains the compatible baseline. No tag, publication or deployment
-is implied by this source change.
+paths remain intentional.
+
+The unreleased shared UI migration reuses public surfaces, headings and action
+rows and requires `context.uiSurfaceVersion === 1` alongside UI v1 before
+registration. The exact paired host source is
+`9fd5204bda99a8bd65b2c5ef152cc47ce87837d5` (exported SDK 0.2.6), not the
+historical Cockpit 0.2.3 baseline. Native media sizing and lifecycle are unchanged.
+No historical Release gains these capabilities retroactively; no tag, publication
+or deployment is implied by this source change.
 
 # Cockpit File 0.1.7
 

@@ -16,7 +16,7 @@ class Draft implements FileDraft {
   readonly id = crypto.randomUUID();
   readonly sessionId: string;
   readonly purpose = { kind: 'prompt' } as const;
-  snapshot: FileDraftSnapshot = { text: '', attachments: [], blocks: [], hasContent: false, revision: 0, pending: false, unconfirmed: false };
+  snapshot: FileDraftSnapshot = { text: '', attachments: [], blocks: [], hasContent: false, revision: 0, pending: false, unconfirmed: false, retired: false };
   listeners = new Set<() => void>();
   blocks = 0;
   releases = 0;

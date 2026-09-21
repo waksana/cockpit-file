@@ -11,9 +11,9 @@ import { registerFileDrafts, type FileComposerContext, type FileDraft } from './
 import { FileInputs } from './file-input.ts';
 
 export const activate: ActivateFrontend = context => {
-  if (context.apiVersion !== 2 || context.uiVersion !== 1 || typeof context.createPortal !== 'function' ||
+  if (context.apiVersion !== 2 || context.uiVersion !== 1 || context.uiSurfaceVersion !== 1 || typeof context.createPortal !== 'function' ||
       typeof context.state?.registerDraft !== 'function') {
-    throw new Error('Cockpit File requires frontend API v2, Module UI v1, context.state.registerDraft and context.createPortal; upgrade the paired host first.');
+    throw new Error('Cockpit File requires frontend API v2, Module UI v1, uiSurfaceVersion v1, context.state.registerDraft and context.createPortal; upgrade the paired host first.');
   }
   const createPortal = context.createPortal;
   const React = context.react;

@@ -17,9 +17,10 @@ async function fixture(t: TestContext, config: Record<string, unknown> = {}) {
   const errors: unknown[] = [];
   const module = await activate({
     apiVersion: 1, moduleId: 'cockpit-file', dataRoot: join(root, 'data'),
+    serviceReadyVersion: 1, host: { call() { assert.fail('File does not call host intents'); } },
     apiBase: '/_modules/cockpit-file/fixed-digest/api', config, signal: controller.signal,
     report: error => { errors.push(error); },
-    invalidate() {},
+    invalidate() {}, publish() { assert.fail('File does not publish module events'); },
   });
   t.after(async () => {
     await module.dispose?.();
