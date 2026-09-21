@@ -52,6 +52,7 @@ function fixture() {
   const definitions: { create(reference: DraftReference): FileState }[] = [];
   const disposers: (() => void)[] = [];
   const state: ModuleStateRegistry = {
+    chatWindow: { getSnapshot() { assert.fail('Picker does not read chat windows'); }, subscribe() { assert.fail('Picker does not subscribe to chat windows'); } },
     host: { getSnapshot: () => ({ sessionId: null, visible: true, connected: true }), subscribe: () => () => {} },
     bindDraft: () => { throw new Error('Picker cannot write base draft state'); },
     registerDraft(definition) {
@@ -89,13 +90,17 @@ function fixture() {
   });
   const makeDraft = (sessionId = 'synthetic-session', purpose: DraftPurpose = { kind: 'prompt' }) => {
     let snapshot: ModuleDraftSnapshot = {
-      text: '', revision: 0, blocks: [], pending: false, unconfirmed: false, hasContent: false,
+      text: '', revision: 0, blocks: [], pending: false, unconfirmed: false, hasContent: false, retired: false,
     };
     const reference: DraftReference = Object.freeze({
       id: crypto.randomUUID(), sessionId, purpose,
       getSnapshot: () => snapshot, subscribe: () => () => {},
     });
-    const alias: ModuleDraft = { ...reference, editText() { throw new Error('No text edits'); }, block() { throw new Error('No blocks'); } };
+    const alias: ModuleDraft = {
+      ...reference, editText() { throw new Error('No text edits'); }, block() { throw new Error('No blocks'); },
+      editTextIfRevision() { assert.fail('Picker does not edit conditional text'); },
+      captureSend() { assert.fail('Picker does not capture send intents'); },
+    };
     aliases.set(reference, reference);
     aliases.set(alias, reference);
     if (purpose.kind === 'prompt') {

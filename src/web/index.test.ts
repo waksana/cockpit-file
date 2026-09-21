@@ -69,7 +69,7 @@ class Draft implements ModuleDraft {
   readonly sessionId: string;
   readonly purpose: DraftPurpose;
   readonly reference: DraftReference;
-  snapshot: ModuleDraftSnapshot = { text: '', blocks: [], hasContent: false, revision: 0, pending: false, unconfirmed: false };
+  snapshot: ModuleDraftSnapshot = { text: '', blocks: [], hasContent: false, revision: 0, pending: false, unconfirmed: false, retired: false };
   listeners = new Set<() => void>();
   blocks = 0;
   constructor(sessionId = 'synthetic-session', purpose: DraftPurpose = { kind: 'prompt' }) {
@@ -95,6 +95,8 @@ class Draft implements ModuleDraft {
     fileScopes.get(this.reference)!.update(current => ({ ...current, attachments: current.attachments.filter(item => item.id !== id) }));
   }
   editText(text: string) { this.snapshot = { ...this.snapshot, text }; }
+  editTextIfRevision(): never { assert.fail('File does not edit conditional text'); }
+  captureSend(): never { assert.fail('File does not capture send intents'); }
   block(reason: string) {
     const id = crypto.randomUUID();
     this.blocks++;
@@ -192,6 +194,7 @@ function harness() {
   let host: HostSnapshot = Object.freeze({ sessionId: 'synthetic-session', visible: true, connected: true });
   let stopped = false;
   const state: ModuleStateRegistry = {
+    chatWindow: { getSnapshot() { assert.fail('File does not read chat windows'); }, subscribe() { assert.fail('File does not subscribe to chat windows'); } },
     host: { getSnapshot: () => host, subscribe: listener => { hostListeners.add(listener); return () => hostListeners.delete(listener); } },
     register(registration) {
       assert.equal(schemas.length, 1, 'the file schema registers before services');
@@ -251,12 +254,15 @@ function harness() {
   const context: ModuleFrontendContext = {
     apiVersion: 2, moduleId: 'cockpit-file', react: react as unknown as ModuleFrontendContext['react'],
     uiVersion: 1,
+    uiSurfaceVersion: 1,
+    menuVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
     createPortal: (node, container) => {
       assert.equal(container, body, 'dialogs use the standard document body, never private host DOM');
       return { type: 'fixture-portal', key: null, children: node, props: { children: [node], container } };
     },
     apiBase, config: { nativePathPrefix: '/data/files/', maxBytes: 100_000 }, state,
     onInvalidate: () => () => {},
+    onEvent() { assert.fail('File does not subscribe to module payload events'); },
     signal: signal.signal, report: error => errors.push(error),
     request: async (path, init) => {
       calls.push({ path, init });
@@ -409,6 +415,12 @@ test('activation registers scoped concrete services and only v2 component and Ma
 });
 
 test('activation explicitly rejects missing or unsupported public UI and portal capability', async () => {
+  for (const uiSurfaceVersion of [undefined, 0, 2]) {
+    const h = harness();
+    await assert.rejects(async () => activate({ ...h.context, uiSurfaceVersion } as unknown as ModuleFrontendContext), /uiSurfaceVersion v1/);
+    assert.equal(h.calls.length, 0);
+    assert.equal(h.services.length, 0);
+  }
   for (const version of [undefined, 0, 2]) {
     const h = harness();
     const invalid = { ...h.context, uiVersion: version } as unknown as ModuleFrontendContext;
@@ -1282,6 +1294,13 @@ test('audio/video controls stay behind an explicit play action and unsafe docume
 
 test('compact row and inline styles stay scoped and preserve independent layout contracts', async () => {
   const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  const source = await readFile(new URL('./index.tsx', import.meta.url), 'utf8');
+  assert.match(source, /className="ck-surface ck-modal cf-preview-dialog"/);
+  assert.match(source, /<h2 className="ck-heading cf-dialog-name"/);
+  assert.match(source, /className="ck-actions cf-dialog-actions"/);
+  const modal = css.match(/\.cf-preview-dialog\s*\{([^}]+)\}/)![1]!;
+  assert.doesNotMatch(modal, /background:|border:|border-radius:|padding:|font:/);
+  assert.doesNotMatch(css, /::backdrop|\.cf-row .cf-row-open:focus-visible/);
   assert.doesNotMatch(css, /\.cf-(?:upload-button|icon-button|button)\b/, 'generic button appearance belongs to the host');
   assert.doesNotMatch(css, /var\(--(?!ck-|cf-)/, 'only public host tokens or module-owned business tokens');
   assert.doesNotMatch(css, /:hover|cursor:/, 'generic hover and interaction appearance use public CSS');
@@ -1323,7 +1342,7 @@ test('full names and errors are accessible on touch while all tile information a
     tree = render();
     const dialog = descendants(tree).find(element => element.type === 'dialog')!;
     assert.equal(dialog.props['aria-label'], `文件详情 ${name}`);
-    assert.deepEqual(descendants(dialog).find(element => element.props.className === 'cf-dialog-name')!.props.children, [name]);
+    assert.deepEqual(descendants(dialog).find(element => element.props.className === 'ck-heading cf-dialog-name')!.props.children, [name]);
     assert.match(JSON.stringify(dialog), /upload limit/);
     assert.equal(descendants(dialog).some(element => ['img', 'video', 'iframe', 'object'].includes(String(element.type))), false);
     (dialog.props.onClose as () => void)();
@@ -1382,7 +1401,7 @@ test('one row button owns visible content, actions are siblings and late dialog 
 test('row progress and reserved actions never add height or use an overlay hit target', async () => {
   const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.cf-row-open\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*1\.25rem minmax\(0, 1fr\) var\(--cf-status-width\);[^}]*height:\s*100%;/s);
-  assert.match(css, /\.cf-row \.cf-row-open:focus-visible\s*\{\s*outline-offset:\s*-3px;/s);
+  assert.doesNotMatch(css, /\.cf-row \.cf-row-open:focus-visible/, 'row buttons retain shared inset focus');
   assert.match(css, /\.cf-progress\s*\{[^}]*position:\s*absolute;[^}]*height:\s*2px;/s);
   assert.doesNotMatch(css, /pointer-events|cf-card-open|cf-preview-button/);
 });

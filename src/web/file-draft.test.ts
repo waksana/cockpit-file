@@ -9,7 +9,7 @@ import type { FileState } from './file-draft.ts';
 
 function base(purpose: DraftPurpose = { kind: 'prompt' }, sessionId = 'fixture-session') {
   let snapshot: ModuleDraftSnapshot = Object.freeze({
-    text: '', blocks: [], revision: 0, hasContent: false, pending: false, unconfirmed: false,
+    text: '', blocks: [], revision: 0, hasContent: false, pending: false, unconfirmed: false, retired: false,
   });
   const listeners = new Set<() => void>();
   const change = (patch: Partial<ModuleDraftSnapshot>) => {
@@ -24,6 +24,8 @@ function base(purpose: DraftPurpose = { kind: 'prompt' }, sessionId = 'fixture-s
   const draft: ModuleDraft = Object.freeze({
     ...reference,
     editText: (text: string) => change({ text, revision: snapshot.revision + 1, hasContent: !!text.trim() }),
+    editTextIfRevision() { assert.fail('File does not edit conditional text'); },
+    captureSend() { assert.fail('File does not capture send intents'); },
     block: (reason: string) => {
       const id = crypto.randomUUID();
       change({ blocks: [...snapshot.blocks, { id, reason }] });
@@ -68,6 +70,7 @@ function harness(existing: ReturnType<typeof base>[] = []) {
     });
   };
   const state: ModuleStateRegistry = {
+    chatWindow: { getSnapshot() { assert.fail('File does not read chat windows'); }, subscribe() { assert.fail('File does not subscribe to chat windows'); } },
     host: { getSnapshot: () => ({ sessionId: null, visible: true, connected: true }), subscribe: () => () => {} },
     registerDraft(definition) {
       registrations.push(definition.id);

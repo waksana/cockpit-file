@@ -1,7 +1,10 @@
 # 下载、构建与安装
 
-**cockpit-file 0.1.8 准备源码仍配套 Cockpit 0.2.3，SDK pin 不变。** 当前源码要求配套宿主的 Web API v2，
-公共 UI v1 与 `context.createPortal`。模块包和后端 API 仍为 v1，后端行为没有随本次 Web 迁移改变。
+**cockpit-file 0.1.8 准备源码要求新增 shared-surfaces v1。** 精确宿主源码为
+`9fd5204bda99a8bd65b2c5ef152cc47ce87837d5`，导出 SDK 版本 0.2.6。
+这不是历史 Release 已支持的声明。当前源码要求 Web API v2、公共 UI v1、
+`context.uiSurfaceVersion === 1` 与 `context.createPortal`，激活前缺少任一能力均拒绝。
+模块包和后端 API 仍为 v1，后端行为没有随本次 Web 迁移改变。
 前端 context/返回声明必须是 API v2；不能仅凭宿主版本号或后端 API v1 推断支持。
 公共规则见宿主[模块 UI 指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md)。
 当前真实宿主提交、版本和导出输入只在

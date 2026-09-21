@@ -11,9 +11,9 @@ import { registerFileDrafts, type FileComposerContext, type FileDraft } from './
 import { FileInputs } from './file-input.ts';
 
 export const activate: ActivateFrontend = context => {
-  if (context.apiVersion !== 2 || context.uiVersion !== 1 || typeof context.createPortal !== 'function' ||
+  if (context.apiVersion !== 2 || context.uiVersion !== 1 || context.uiSurfaceVersion !== 1 || typeof context.createPortal !== 'function' ||
       typeof context.state?.registerDraft !== 'function') {
-    throw new Error('Cockpit File requires frontend API v2, Module UI v1, context.state.registerDraft and context.createPortal; upgrade the paired host first.');
+    throw new Error('Cockpit File requires frontend API v2, Module UI v1, uiSurfaceVersion v1, context.state.registerDraft and context.createPortal; upgrade the paired host first.');
   }
   const createPortal = context.createPortal;
   const React = context.react;
@@ -279,7 +279,7 @@ export const activate: ActivateFrontend = context => {
           <span className="cf-row-name">
             <span className="cf-name-stem" dir="auto">{stem}</span>{extension && <bdi className="cf-name-extension">{extension}</bdi>}
           </span>
-          <span className={`cf-row-status${failure ? ' cf-error' : ''}`} title={failure || information}>{summary}</span>
+          <span className={`ck-status-text cf-row-status ${failure ? 'ck-danger' : 'ck-text-secondary'}`} title={failure || information}>{summary}</span>
           {(busy || mediaLoading) && <progress className="cf-progress" aria-label={`${name}：${summary}`} />}
         </button>
         <span className="cf-row-actions">
@@ -288,15 +288,15 @@ export const activate: ActivateFrontend = context => {
         </span>
       </>}
       {failure && <span className="cf-announcement" role="alert">{failure}</span>}
-      {open && page?.body && createPortal(<dialog key={expanded.revision} ref={dialog} className="cf-preview-dialog" aria-label={`${preview && !failure ? '预览' : '文件详情'} ${name}`}
+      {open && page?.body && createPortal(<dialog key={expanded.revision} ref={dialog} className="ck-surface ck-modal cf-preview-dialog" aria-label={`${preview && !failure ? '预览' : '文件详情'} ${name}`}
         onClose={() => setExpanded(current => current === expanded ? undefined : current)}>
-        <span className="cf-dialog-header">
-          <span className="cf-dialog-name" dir="auto">{name}</span>
+        <header className="ck-actions cf-dialog-header">
+          <h2 className="ck-heading cf-dialog-name" dir="auto">{name}</h2>
           <button ref={closeButton} type="button" className="ck-button" onClick={() => dialog.current?.close()}>
             <Icon small name="x" />
             {preview && !failure ? '关闭预览' : '关闭详情'}
           </button>
-        </span>
+        </header>
         <div className="cf-file-information">
           {information && <p>{information}</p>}
           {failure && <p className="cf-error" role="alert">{failure}</p>}
@@ -309,7 +309,7 @@ export const activate: ActivateFrontend = context => {
             controls preload="metadata" onLoadedMetadata={() => mediaResult(mediaKey, true)} onError={() => mediaResult(mediaKey, false)} />
             : <audio key={mediaKey} className="cf-expanded-media" src={preview.url} aria-label={name} controls preload="metadata"
               onLoadedMetadata={() => mediaResult(mediaKey, true)} onError={() => mediaResult(mediaKey, false)} />)}
-        <div className="cf-dialog-actions">
+        <div className="ck-actions cf-dialog-actions">
           {retryAction && <span className="cf-dialog-retry" onClickCapture={event => {
             // Retry replaces its own action; keep keyboard focus inside the modal.
             if (event.currentTarget.contains(event.currentTarget.ownerDocument.activeElement)) {
