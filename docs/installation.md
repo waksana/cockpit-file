@@ -1,6 +1,6 @@
 # 下载、构建与安装
 
-**cockpit-file 0.1.8 准备源码要求新增 shared-surfaces v1。** 精确宿主源码为
+**cockpit-file 0.1.9 准备源码要求新增 shared-surfaces v1。** 精确宿主源码为
 `9fd5204bda99a8bd65b2c5ef152cc47ce87837d5`，导出 SDK 版本 0.2.6。
 这不是历史 Release 已支持的声明。当前源码要求 Web API v2、公共 UI v1、
 `context.uiSurfaceVersion === 1` 与 `context.createPortal`，激活前缺少任一能力均拒绝。
@@ -60,8 +60,8 @@ pnpm package
 当前准备源码的默认输出（不表示已发布）：
 
 ```text
-module-output/cockpit-file-0.1.8.tgz
-module-output/cockpit-file-0.1.8.tgz.sha256
+module-output/cockpit-file-0.1.9.tgz
+module-output/cockpit-file-0.1.9.tgz.sha256
 ```
 
 输出目录必须不存在，也可以 `pnpm package /absolute/new/output` 指定新目录。

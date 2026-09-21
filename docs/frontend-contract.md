@@ -1,6 +1,6 @@
 # 前端接入契约
 
-**当前 0.1.8 准备源码：Web API v2，包/后端 API v1，要求公共 UI v1 与独立 shared-surfaces v1。**
+**当前 0.1.9 准备源码：Web API v2，包/后端 API v1，要求公共 UI v1 与独立 shared-surfaces v1。**
 精确配套宿主为 `9fd5204bda99a8bd65b2c5ef152cc47ce87837d5`（SDK 源码版本 0.2.6），
 不是历史同版本 Release 已具有新能力的声明。激活在注册贡献前检查
 `context.uiSurfaceVersion === 1`；缺少或不支持时明确拒绝。
