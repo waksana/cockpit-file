@@ -50,10 +50,6 @@
   text-align: start;
 }
 
-.cf-row .cf-row-open:focus-visible {
-  outline-offset: -3px;
-}
-
 .cf-file-icon {
   display: grid;
   place-items: center;
@@ -86,8 +82,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: end;
-  font-size: 0.75rem;
-  color: var(--ck-color-muted);
 }
 
 .cf-error {
@@ -171,22 +165,11 @@
   width: min(48rem, calc(100vw - 2rem));
   max-width: calc(100vw - 2rem);
   max-height: calc(100dvh - 2rem);
-  padding: 1rem;
-  border: 1px solid var(--ck-color-border);
-  border-radius: var(--ck-radius);
-  color: var(--ck-color-text);
-  background: var(--ck-color-surface);
-}
-
-.cf-preview-dialog::backdrop {
-  background: #0008;
 }
 
 .cf-dialog-header {
-  display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 1rem;
   margin-bottom: 0.75rem;
 }
 
@@ -202,9 +185,6 @@
 }
 
 .cf-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--ck-space);
   margin-top: 0.75rem;
 }
 

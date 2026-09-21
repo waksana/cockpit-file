@@ -1282,6 +1282,13 @@ test('audio/video controls stay behind an explicit play action and unsafe docume
 
 test('compact row and inline styles stay scoped and preserve independent layout contracts', async () => {
   const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  const source = await readFile(new URL('./index.tsx', import.meta.url), 'utf8');
+  assert.match(source, /className="ck-surface ck-modal cf-preview-dialog"/);
+  assert.match(source, /<h2 className="ck-heading cf-dialog-name"/);
+  assert.match(source, /className="ck-actions cf-dialog-actions"/);
+  const modal = css.match(/\.cf-preview-dialog\s*\{([^}]+)\}/)![1]!;
+  assert.doesNotMatch(modal, /background:|border:|border-radius:|padding:|font:/);
+  assert.doesNotMatch(css, /::backdrop|\.cf-row .cf-row-open:focus-visible/);
   assert.doesNotMatch(css, /\.cf-(?:upload-button|icon-button|button)\b/, 'generic button appearance belongs to the host');
   assert.doesNotMatch(css, /var\(--(?!ck-|cf-)/, 'only public host tokens or module-owned business tokens');
   assert.doesNotMatch(css, /:hover|cursor:/, 'generic hover and interaction appearance use public CSS');
@@ -1323,7 +1330,7 @@ test('full names and errors are accessible on touch while all tile information a
     tree = render();
     const dialog = descendants(tree).find(element => element.type === 'dialog')!;
     assert.equal(dialog.props['aria-label'], `文件详情 ${name}`);
-    assert.deepEqual(descendants(dialog).find(element => element.props.className === 'cf-dialog-name')!.props.children, [name]);
+    assert.deepEqual(descendants(dialog).find(element => element.props.className === 'ck-heading cf-dialog-name')!.props.children, [name]);
     assert.match(JSON.stringify(dialog), /upload limit/);
     assert.equal(descendants(dialog).some(element => ['img', 'video', 'iframe', 'object'].includes(String(element.type))), false);
     (dialog.props.onClose as () => void)();
@@ -1382,7 +1389,7 @@ test('one row button owns visible content, actions are siblings and late dialog 
 test('row progress and reserved actions never add height or use an overlay hit target', async () => {
   const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.cf-row-open\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*1\.25rem minmax\(0, 1fr\) var\(--cf-status-width\);[^}]*height:\s*100%;/s);
-  assert.match(css, /\.cf-row \.cf-row-open:focus-visible\s*\{\s*outline-offset:\s*-3px;/s);
+  assert.doesNotMatch(css, /\.cf-row \.cf-row-open:focus-visible/, 'row buttons retain shared inset focus');
   assert.match(css, /\.cf-progress\s*\{[^}]*position:\s*absolute;[^}]*height:\s*2px;/s);
   assert.doesNotMatch(css, /pointer-events|cf-card-open|cf-preview-button/);
 });
