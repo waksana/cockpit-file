@@ -1,6 +1,6 @@
 # 下载、构建与安装
 
-**cockpit-file 0.1.7 配套 Cockpit 0.2.3。** 当前源码要求配套宿主的 Web API v2，
+**cockpit-file 0.1.8 准备源码仍配套 Cockpit 0.2.3，SDK pin 不变。** 当前源码要求配套宿主的 Web API v2，
 公共 UI v1 与 `context.createPortal`。模块包和后端 API 仍为 v1，后端行为没有随本次 Web 迁移改变。
 前端 context/返回声明必须是 API v2；不能仅凭宿主版本号或后端 API v1 推断支持。
 公共规则见宿主[模块 UI 指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md)。
@@ -54,11 +54,11 @@ pnpm build &&
 pnpm package
 ```
 
-默认输出：
+当前准备源码的默认输出（不表示已发布）：
 
 ```text
-module-output/cockpit-file-0.1.7.tgz
-module-output/cockpit-file-0.1.7.tgz.sha256
+module-output/cockpit-file-0.1.8.tgz
+module-output/cockpit-file-0.1.8.tgz.sha256
 ```
 
 输出目录必须不存在，也可以 `pnpm package /absolute/new/output` 指定新目录。

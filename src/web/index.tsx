@@ -292,7 +292,7 @@ export const activate: ActivateFrontend = context => {
         onClose={() => setExpanded(current => current === expanded ? undefined : current)}>
         <span className="cf-dialog-header">
           <span className="cf-dialog-name" dir="auto">{name}</span>
-          <button ref={closeButton} type="button" className="ck-button" autoFocus onClick={() => dialog.current?.close()}>
+          <button ref={closeButton} type="button" className="ck-button" onClick={() => dialog.current?.close()}>
             <Icon small name="x" />
             {preview && !failure ? '关闭预览' : '关闭详情'}
           </button>
@@ -310,9 +310,11 @@ export const activate: ActivateFrontend = context => {
             : <audio key={mediaKey} className="cf-expanded-media" src={preview.url} aria-label={name} controls preload="metadata"
               onLoadedMetadata={() => mediaResult(mediaKey, true)} onError={() => mediaResult(mediaKey, false)} />)}
         <div className="cf-dialog-actions">
-          {retryAction && <span className="cf-dialog-retry" onClickCapture={() => {
+          {retryAction && <span className="cf-dialog-retry" onClickCapture={event => {
             // Retry replaces its own action; keep keyboard focus inside the modal.
-            closeButton.current?.focus({ preventScroll: true });
+            if (event.currentTarget.contains(event.currentTarget.ownerDocument.activeElement)) {
+              closeButton.current?.focus({ preventScroll: true });
+            }
           }}>{retryAction}</span>}
           {downloadAction}{actions}
         </div>
