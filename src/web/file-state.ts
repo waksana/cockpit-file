@@ -1,12 +1,12 @@
-import type { ModuleFrontendContext } from '@cockpit/module-api';
+import type { ModuleFrontendServices } from '@cockpit/module-api';
 import type { FileComposerContext, FileAttachment, FileDraft } from './file-draft.ts';
 import { MAX_ATTACHMENTS } from './file-draft.ts';
 import { fileRequestPath, managedFileUrl, nativeFileUrl } from '../shared/files.ts';
 
 export const DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
 
-type Request = ModuleFrontendContext['request'];
-type Report = ModuleFrontendContext['report'];
+type Request = ModuleFrontendServices['request'];
+type Report = ModuleFrontendServices['report'];
 type UploadStatus = 'uploading' | 'failed' | 'ready';
 
 export interface UploadItem {
@@ -107,6 +107,10 @@ export class UploadStore {
 
   constructor(options: UploadOptions) {
     this.options = options;
+  }
+
+  hasUnpersistedWork(): boolean {
+    return !this.disposed && [...this.scopes.values()].some(scope => scope.entries.some(entry => !entry.attached));
   }
 
   private scope(draftId: string): UploadScope {

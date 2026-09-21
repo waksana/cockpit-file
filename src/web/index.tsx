@@ -4,11 +4,11 @@ import type {
 } from '@cockpit/module-api';
 import type { ReactNode, SyntheticEvent } from 'react';
 import { isLocalFileReference, messageFileUrl, nativeFileUrl } from '../shared/files.ts';
-import { DEFAULT_MAX_BYTES, FileProbes, formatBytes, previewKind, UploadStore } from './file-state.ts';
+import { formatBytes, previewKind } from './file-state.ts';
 import { decodeNativeBlob, unavailableBlobReason, type NativeBlob } from './blob.ts';
 import { icons } from './icons.ts';
-import { registerFileDrafts, type FileComposerContext, type FileDraft } from './file-draft.ts';
-import { FileInputs } from './file-input.ts';
+import { type FileComposerContext, type FileDraft } from './file-draft.ts';
+import { createFileServices } from './file-services.ts';
 
 export const activate: ActivateFrontend = context => {
   if (context.apiVersion !== 2 || context.uiVersion !== 1 || context.uiSurfaceVersion !== 1 || typeof context.createPortal !== 'function' ||
@@ -17,38 +17,8 @@ export const activate: ActivateFrontend = context => {
   }
   const createPortal = context.createPortal;
   const React = context.react;
-  const nativePathPrefix = typeof context.config.nativePathPrefix === 'string' ? context.config.nativePathPrefix : '';
-  const maxBytes = typeof context.config.maxBytes === 'number' && Number.isSafeInteger(context.config.maxBytes) && context.config.maxBytes > 0
-    ? context.config.maxBytes : DEFAULT_MAX_BYTES;
-  const fileDrafts = registerFileDrafts(context.state);
-  const resources = context.state.register({
-    id: 'view-resources',
-    create: () => new Set<() => void>(),
-    dispose: releases => { for (const release of [...releases]) release(); releases.clear(); },
-  }).get();
-  const uploads = context.state.register({
-    id: 'uploads',
-    create: () => new UploadStore({
-      request: context.request, report: context.report, apiBase: context.apiBase, nativePathPrefix, maxBytes,
-    }),
-    dispose: store => store.dispose(),
-  }).get();
-  const probes = context.state.register({
-    id: 'file-probes',
-    create: () => new FileProbes(context.request, context.apiBase),
-    dispose: store => store.dispose(),
-  }).get();
-  const page = typeof document === 'undefined' ? undefined : document;
-  const inputs = context.state.register({
-    id: 'file-inputs',
-    create: () => new FileInputs({
-      uploads, report: context.report, signal: context.signal, page, enabled: !!nativePathPrefix,
-    }),
-    dispose: store => store.dispose(),
-  }).get();
-  const visibilityChanged = () => probes.setVisible(context.state.host.getSnapshot().visible);
-  visibilityChanged();
-  resources.add(context.state.host.subscribe(visibilityChanged));
+  const services = createFileServices(context);
+  const { nativePathPrefix, maxBytes, fileDrafts, resources, uploads, probes, inputs, page } = services;
 
   function useDraft(draft: DraftReference) {
     return React.useSyncExternalStore(
@@ -84,7 +54,7 @@ export const activate: ActivateFrontend = context => {
         disabled={disabled}
         title={composer.operation === 'prompt' ? `添加文件（单个最多 ${formatBytes(maxBytes)}）` : '当前操作不接受附件'}
         aria-label="添加文件"
-        onClick={() => { if (!disabled && !disposed) inputs.pick(composer); }}
+        onClick={() => { if (!disabled && !services.disposed) inputs.pick(composer); }}
       >
         <Icon name="paperclip" />
       </button>;
@@ -371,7 +341,7 @@ export const activate: ActivateFrontend = context => {
     const identity = React.useMemo(() => ({}), [file, data, mimeType, omittedReason]);
     const unavailable = file ? undefined : attachment ? unavailableBlobReason(attachment) : '原生未提供附件数据';
     React.useEffect(() => {
-      if (disposed || context.signal.aborted || unavailable) {
+      if (services.disposed || context.signal.aborted || unavailable) {
         setState(undefined);
         return;
       }
@@ -424,22 +394,13 @@ export const activate: ActivateFrontend = context => {
       : url ? <FileCard {...card} url={url} /> : <FileTile {...card} />;
   }
 
-  let disposed = false;
-  function dispose() {
-    if (disposed) return;
-    disposed = true;
-    inputs.dispose();
-    context.signal.removeEventListener('abort', dispose);
-  }
-  context.signal.addEventListener('abort', dispose, { once: true });
-  if (context.signal.aborted) dispose();
   const frontend: ModuleFrontend = {
     apiVersion: 2,
     components: [{
       id: 'file-composer',
       boundary: 'composer',
       wrap: Base => function FileComposer(props) {
-        if (disposed) return <Base {...props} />;
+        if (services.disposed) return <Base {...props} />;
         const draft = fileDrafts.get(props.draft);
         if (!draft) return <Base {...props} />;
         return <Base {...props}
@@ -449,7 +410,7 @@ export const activate: ActivateFrontend = context => {
       id: 'file-editor',
       boundary: 'composerEditor',
       wrap: Base => function FileEditor(props) {
-        if (disposed) return <Base {...props} />;
+        if (services.disposed) return <Base {...props} />;
         const draft = fileDrafts.get(props.draft);
         if (!draft || props.operation !== 'prompt') return <Base {...props} />;
         const composer: FileComposerContext = { draft, operation: props.operation, disabled: props.disabled };
@@ -465,16 +426,16 @@ export const activate: ActivateFrontend = context => {
       wrap: Base => function FileAttachment(props) {
         const url = props.attachment.type === 'file'
           ? nativeFileUrl(props.attachment.path, nativePathPrefix, context.apiBase) : null;
-        if (disposed || (props.attachment.type !== 'blob' && !url)) return <Base {...props} />;
+        if (services.disposed || (props.attachment.type !== 'blob' && !url)) return <Base {...props} />;
         return <AttachmentCard {...props} url={url ?? undefined} />;
       },
     }],
     markdown: [{
       id: 'file-markdown',
-      matches: node => !disposed && nodeUrl(node) !== null,
+      matches: node => !services.disposed && nodeUrl(node) !== null,
       component: FileRenderer,
     }],
-    dispose,
+    dispose: services.dispose,
   };
   return frontend;
 };

@@ -1,7 +1,14 @@
 # Cockpit File 文档
 
-**当前准备源码：cockpit-file 0.1.9，要求 Web API v2 / 公共 UI v1 / shared-surfaces v1；未声明发布。**
+**当前准备源码：cockpit-file 0.2.0，最低配套宿主 Cockpit 0.3.0（支持独立新版呈现）。**
+新增呈现与经典共用业务服务，不复制后端；双入口、组件与浏览器离开保护见
+[前端接入契约](frontend-contract.md#independent-next-ui)。
+两套呈现的既有持久化草稿编码不变。旧宿主可能拒绝 `frontend.next`。
+
+两套呈现均使用 Web API v2；经典要求公共 UI v1 / shared-surfaces v1，
+新版要求公共 React UI v1。尚未声明发布或部署。
 精确支持 SHA 由[安装指南](installation.md)与 `tooling/host-sdk.json` 记录，不以旧发行版本推断新能力。
+固定基础提交提供 SDK 与组件合同，不表示最终宿主应用已交付。
 可下载包以该 tag 的 Release workflow 成功发布的资产为准，发行不自动安装。
 包/后端 API 仍为 v1。本次只迁移 Web 接入，不修改文件捕获、存储或 HTTP 行为。
 远程安装、全局文件库和旧历史补抓不在当前实现中。

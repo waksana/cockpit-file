@@ -23,11 +23,18 @@ export async function packageModule(root, output) {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(manifest.id)
     || !/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(manifest.version)
     || metadata.version !== manifest.version) throw new Error('Module identity and package version must agree');
-  const inputs = [manifest.backend, manifest.frontend?.entry, ...(manifest.frontend?.styles ?? [])];
+  const presentations = [manifest.frontend, ...(manifest.frontend?.next ? [manifest.frontend.next] : [])];
+  const frontendInputs = presentations.flatMap(presentation => [presentation?.entry, ...(presentation?.styles ?? [])]);
+  const inputs = [manifest.backend, ...frontendInputs];
   for (const file of inputs) {
     if (typeof file !== 'string' || !file.startsWith('dist/') || file.split('/').some(part => !part || part === '.' || part === '..')
       || file.includes('\\')) throw new Error('Module entry must be a safe dist path');
     if (!(await lstat(join(root, file))).isFile()) throw new Error(`Build the module first: missing ${file}`);
+  }
+  for (const file of frontendInputs) {
+    if (!manifest.frontend.assets.some(asset => file === asset || file.startsWith(`${asset}/`))) {
+      throw new Error('Frontend entry/styles must be under declared asset roots');
+    }
   }
   await regularTree(join(root, 'dist'));
   if (!(await lstat(join(root, 'LICENSE'))).isFile()) throw new Error('Missing module license');
