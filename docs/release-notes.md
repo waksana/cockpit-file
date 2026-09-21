@@ -16,6 +16,11 @@ File names, status and recovery form a wrapping attachment list. Markdown
 references remain inline native links. Dialogs retain the standard host close
 control; retry focus moves to stable content only when its focused action is
 about to disappear. Media is still explicitly opened, time-bounded and download-safe.
+In the attachment tray, retry hands focus to the same file's persistent trigger.
+Its draft-owned keyed row survives upload, repeated failure and ready-card
+replacement without delayed focus effects. Successful focused removal returns
+to that draft's add-file action; rejected/unfocused actions and late results do
+not reclaim focus from another control or owner.
 
 Both presentations share the existing input/upload/draft/probe services and an
 activation-owned native `beforeunload` safeguard. Unfinished work in hidden

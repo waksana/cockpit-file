@@ -147,7 +147,14 @@ export const activate: ActivateNextFrontend = context => {
               <span className="cfn-detail">{information || '文件'}</span>
             </span>
           </Button>
-          <span className="cfn-item-actions">{retry}{actions || downloadAction}</span>
+          <span className="cfn-item-actions">
+            {retry && <span onClickCapture={event => {
+              if (event.currentTarget.contains(event.currentTarget.ownerDocument.activeElement)) {
+                trigger.current?.focus({ preventScroll: true });
+              }
+            }}>{retry}</span>}
+            {actions || downloadAction}
+          </span>
           {busy && <progress className="cfn-progress" aria-label={`${name}：${status || '检查中'}`} />}
           {error && <span className="cfn-item-error" role="alert">{error}</span>}
         </>}
@@ -188,56 +195,58 @@ export const activate: ActivateNextFrontend = context => {
     </Dialog>;
   }
 
-  function FileCard({ url, error, busy, status, retry, download = true, ...props }: ItemProps & { url: string }) {
-    const state = React.useSyncExternalStore(
-      React.useCallback(listener => probes.subscribe(url, listener), [url]),
-      React.useCallback(() => probes.snapshot(url), [url]),
-    );
-    const kind = state.mime ? previewKind(state.mime) : null;
-    return <FileItem {...props} identity={url} href={url}
-      busy={busy ?? state.status === 'pending'} status={status || (state.status === 'pending' ? '检查中' : undefined)}
-      metadata={state.size !== undefined ? formatBytes(state.size) : state.mime}
-      error={error || state.error} preview={state.status === 'ready' && kind ? { url, key: `${url}:${state.round}`, kind } : undefined}
-      downloadUrl={download && state.status === 'ready' ? `${url}?download=1` : undefined}
-      retry={retry ?? (state.status === 'unavailable' && <Button type="button" variant="outline"
-        onClick={() => probes.retry(url)} aria-label={`重新加载 ${props.name}`}><Icon name="rotate-cw" />重新检查</Button>)} />;
+  interface ResourceProps extends ItemProps {
+    url?: string;
+    attachment?: NativeBlob;
+    file?: File;
+    size?: number;
   }
 
-  function BlobCard({ attachment, file, error, download = true, ...props }: ItemProps & { attachment?: NativeBlob; file?: File }) {
+  function FileCard({ url, attachment, file, size, error, busy, status, retry, download = true, ...props }: ResourceProps) {
+    const state = React.useSyncExternalStore(
+      React.useCallback(listener => url ? probes.subscribe(url, listener) : () => {}, [url]),
+      React.useCallback(() => url ? probes.snapshot(url) : undefined, [url]),
+    );
     const { data, mimeType, omittedReason } = attachment ?? { mimeType: file?.type || 'application/octet-stream' };
     const identity = React.useMemo(() => ({}), [data, mimeType, omittedReason, file]);
     const [resource, setResource] = React.useState<{
       identity: object; url?: string; mime?: string; size?: number; error?: string;
     }>();
-    const unavailable = file ? undefined : attachment ? unavailableBlobReason(attachment) : '原生未提供附件数据';
+    const unavailable = file ? undefined : attachment ? unavailableBlobReason(attachment) : undefined;
     React.useEffect(() => {
-      if (services.disposed || context.signal.aborted || unavailable) return;
-      let url: string | undefined;
+      if (services.disposed || context.signal.aborted || url || unavailable || (!file && !attachment)) return;
+      let localUrl: string | undefined;
       const release = () => {
-        if (url) URL.revokeObjectURL(url);
-        url = undefined;
+        if (localUrl) URL.revokeObjectURL(localUrl);
+        localUrl = undefined;
         resources.delete(release);
       };
       try {
         const blob = file ?? decodeNativeBlob({ type: 'blob', data, mimeType }, maxBytes);
-        url = URL.createObjectURL(blob);
+        localUrl = URL.createObjectURL(blob);
         resources.add(release);
-        setResource({ identity, url, mime: blob.type, size: blob.size });
+        setResource({ identity, url: localUrl, mime: blob.type, size: blob.size });
       } catch (cause) {
         release();
         context.report(cause);
         setResource({ identity, error: cause instanceof Error ? cause.message : '原生附件无法读取' });
       }
       return release;
-    }, [identity]);
+    }, [identity, url]);
     const current = resource?.identity === identity ? resource : undefined;
-    const failure = unavailable || current?.error;
-    const kind = current?.mime ? previewKind(current.mime) : null;
-    return <FileItem {...props} identity={identity} error={error || failure}
-      busy={props.busy ?? (!failure && !current)}
-      metadata={current?.size !== undefined ? formatBytes(current.size) : file ? formatBytes(file.size) : undefined}
-      preview={!failure && current?.url && kind ? { url: current.url, key: current.url, kind } : undefined}
-      downloadUrl={download && !failure ? current?.url : undefined} />;
+    const failure = url ? state?.error : unavailable || current?.error;
+    const mime = url ? state?.mime : current?.mime;
+    const bytes = url ? state?.size : current?.size ?? file?.size ?? size;
+    const kind = mime ? previewKind(mime) : null;
+    const original = url ? state?.status === 'ready' ? url : undefined : !failure ? current?.url : undefined;
+    const loading = url ? state?.status === 'pending' : !!(file || attachment) && !failure && !current;
+    return <FileItem {...props} identity={url ?? identity} href={url} error={error || failure}
+      busy={busy ?? loading} status={status || (url && loading ? '检查中' : undefined)}
+      metadata={bytes !== undefined ? formatBytes(bytes) : mime}
+      preview={original && kind ? { url: original, key: url ? `${url}:${state?.round}` : original, kind } : undefined}
+      downloadUrl={download && original ? url ? `${url}?download=1` : original : undefined}
+      retry={retry ?? (url && state?.status === 'unavailable' && <Button type="button" variant="outline"
+        onClick={() => probes.retry(url)} aria-label={`重新加载 ${props.name}`}><Icon name="rotate-cw" />重新检查</Button>)} />;
   }
 
   function AttachmentTray(composer: FileComposerContext) {
@@ -249,34 +258,47 @@ export const activate: ActivateNextFrontend = context => {
       const button = uploadTriggers.get(composer.draft.id);
       if (button?.isConnected) button.focus({ preventScroll: true });
     };
+    const remove = (event: SyntheticEvent<HTMLButtonElement>, action: () => void, remains: () => boolean) => {
+      const focused = event.currentTarget === event.currentTarget.ownerDocument.activeElement;
+      action();
+      if (focused && !remains()) restoreFocus();
+    };
+    const readyIds = new Set(draft.attachments.map(item => item.id));
+    // One keyed resource component keeps the file trigger alive across upload, retry and persistence.
+    const rows: { id: string; props: ResourceProps }[] = [
+      ...draft.attachments.map(item => {
+        const name = item.value.displayName || '附件';
+        const url = item.value.type === 'file' ? nativeFileUrl(item.value.path, nativePathPrefix, context.apiBase) : null;
+        return { id: item.id, props: {
+          name, url: url ?? undefined, attachment: item.value.type === 'blob' ? item.value : undefined,
+          status: draft.pending ? '正在提交' : '准备就绪', download: false, restoreFocus,
+          actions: <Button type="button" variant="ghost" size="icon" disabled={disabled} title="移除附件"
+            aria-label={`移除 ${name}`} onClick={event => remove(event,
+              () => uploads.removeAttachment(composer.draft, item.id),
+              () => composer.draft.getSnapshot().attachments.some(value => value.id === item.id))}><Icon name="x" /></Button>,
+        } };
+      }),
+      ...pending.items.filter(item => !readyIds.has(`cf-upload:${item.id}`)).map(item => ({
+        id: `cf-upload:${item.id}`, props: {
+          name: item.name, url: item.url, size: item.size,
+          file: item.file && previewKind(item.file.type) === 'image' ? item.file : undefined,
+          download: false, busy: item.status === 'uploading', error: item.error, restoreFocus,
+          status: item.status === 'uploading' ? '上传中' : item.status === 'ready' ? '已上传，等待加入草稿' : '上传未完成',
+          retry: item.status === 'failed' && <Button type="button" variant="outline" disabled={disabled || composer.operation !== 'prompt'}
+            aria-label={`重新上传 ${item.name}`} onClick={() => uploads.retry(composer.draft, item.id)}><Icon name="rotate-cw" />重试</Button>,
+          actions: <Button type="button" variant="ghost" size="icon" disabled={disabled}
+            title={item.status === 'uploading' ? '取消上传' : '移除附件'} aria-label={`移除 ${item.name}`}
+            onClick={event => remove(event, () => uploads.remove(composer.draft, item.id),
+              () => uploads.snapshot(composer.draft).items.some(value => value.id === item.id))}><Icon name="x" /></Button>,
+        },
+      })),
+    ];
     if (!draft.attachments.length && !pending.items.length && !pending.error) return null;
     return <section className="cfn-tray" aria-label="文件附件">
       <h3 className="cfn-tray-heading">附件 <span className="cfn-detail">{draft.attachments.length + pending.items.length}</span></h3>
       {pending.error && <Alert variant="destructive"><AlertDescription>{pending.error}</AlertDescription></Alert>}
       <ul className="cfn-list">
-        {draft.attachments.map(item => {
-          const name = item.value.displayName || '附件';
-          const props: ItemProps = { name, status: draft.pending ? '正在提交' : '准备就绪', download: false, restoreFocus,
-            actions: <Button type="button" variant="ghost" size="icon" disabled={disabled} title="移除附件"
-              aria-label={`移除 ${name}`} onClick={() => uploads.removeAttachment(composer.draft, item.id)}><Icon name="x" /></Button> };
-          const url = item.value.type === 'file' ? nativeFileUrl(item.value.path, nativePathPrefix, context.apiBase) : null;
-          return <li key={item.id}>{url ? <FileCard {...props} url={url} />
-            : item.value.type === 'blob' ? <BlobCard {...props} attachment={item.value} /> : <FileItem {...props} />}</li>;
-        })}
-        {pending.items.map(item => {
-          const props: ItemProps = {
-            name: item.name, download: false, busy: item.status === 'uploading', error: item.error, restoreFocus,
-            status: item.status === 'uploading' ? '上传中' : item.status === 'ready' ? '已上传，等待加入草稿' : '上传未完成',
-            retry: item.status === 'failed' && <Button type="button" variant="outline" disabled={disabled || composer.operation !== 'prompt'}
-              aria-label={`重新上传 ${item.name}`} onClick={() => uploads.retry(composer.draft, item.id)}><Icon name="rotate-cw" />重试</Button>,
-            actions: <Button type="button" variant="ghost" size="icon" disabled={disabled}
-              title={item.status === 'uploading' ? '取消上传' : '移除附件'} aria-label={`移除 ${item.name}`}
-              onClick={() => uploads.remove(composer.draft, item.id)}><Icon name="x" /></Button>,
-          };
-          return <li key={item.id}>{item.url ? <FileCard {...props} url={item.url} />
-            : item.file && previewKind(item.file.type) === 'image' ? <BlobCard {...props} file={item.file} />
-              : <FileItem {...props} metadata={formatBytes(item.size)} />}</li>;
-        })}
+        {rows.map(item => <li key={`${composer.draft.id}:${item.id}`}><FileCard {...item.props} /></li>)}
       </ul>
     </section>;
   }
@@ -316,7 +338,7 @@ export const activate: ActivateNextFrontend = context => {
 
   function AttachmentCard({ attachment, label, actions, url }: AttachmentProps & { url?: string }) {
     const props = { name: label || attachment.displayName || '附件', actions };
-    return attachment.type === 'blob' ? <BlobCard {...props} attachment={attachment} />
+    return attachment.type === 'blob' ? <FileCard {...props} attachment={attachment} />
       : url ? <FileCard {...props} url={url} /> : <FileItem {...props} />;
   }
 

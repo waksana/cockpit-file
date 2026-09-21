@@ -1702,6 +1702,140 @@ test('next draft dialog returns to its own add-file action when upload completio
   h.unmount(); frontend.dispose?.();
 });
 
+test('next upload retry retains its file trigger through repeated failure, persistence and resource replacement', async () => {
+  for (const mime of ['image/png', 'text/plain']) {
+    const h = harness();
+    const responses: ((response: Response) => void)[] = [];
+    h.context.request = async (_path, init) => init?.method === 'HEAD'
+      ? new Response(null, { headers: { 'content-type': mime } })
+      : new Promise(resolve => responses.push(resolve));
+    const frontend = await activateNext(h.context);
+    const draft = new Draft('retry-focus');
+    const file = new File(['synthetic bytes'], 'fail-once-synthetic-image-with-a-long-file-name.png', { type: mime });
+    const render = () => h.render(enhanceComposer(frontend), composerProps(frontend, {
+      draft: draft.reference, operation: 'prompt', disabled: false,
+    }));
+    selectFiles(frontend, { draft: draft.reference, operation: 'prompt', disabled: false }, [file]);
+    let tree = render(); h.flushEffects();
+    const rowKey = descendants(tree).find(item => item.type === 'li')!.props.key;
+    const ownerDocument = { activeElement: {} };
+    const trigger = { isConnected: true, focus() { ownerDocument.activeElement = trigger; } };
+    (descendants(tree).find(item => item.props['aria-haspopup'] === 'dialog')!.props.ref as (node: unknown) => void)(trigger);
+    const retryUpload = (focused: boolean) => {
+      const retry = descendants(tree).find(item => item.props['aria-label'] === `重新上传 ${file.name}`)!;
+      assert.ok(retry);
+      const wrapper = descendants(tree).find(item => item.props.onClickCapture && descendants(item).includes(retry))!;
+      (wrapper.props.onClickCapture as (event: unknown) => void)({
+        currentTarget: { ownerDocument, contains: () => focused },
+      });
+      click(retry);
+      tree = render(); h.flushEffects();
+      assert.equal(descendants(tree).some(item => item.props['aria-label'] === `重新上传 ${file.name}`), false);
+      assert.equal(descendants(tree).find(item => item.type === 'li')!.props.key, rowKey);
+    };
+    responses[0]!(Response.json({ error: 'Synthetic upload failure' }, { status: 503 }));
+    await settle(); tree = render(); h.flushEffects();
+    retryUpload(true);
+    assert.equal(ownerDocument.activeElement, trigger, 'focus moves before the retry action disappears');
+    responses[1]!(Response.json({ error: 'Synthetic repeated failure' }, { status: 503 }));
+    await settle(); tree = render(); h.flushEffects();
+    assert.equal(ownerDocument.activeElement, trigger, 'repeated failure keeps the same useful focus target');
+    const elsewhere = {};
+    ownerDocument.activeElement = elsewhere;
+    retryUpload(false);
+    assert.equal(ownerDocument.activeElement, elsewhere, 'programmatic/unfocused retry cannot claim focus');
+    responses[2]!(Response.json({
+      fileId, attachment: { type: 'file', path: `/data/files/${fileId}/ready/body.png`, displayName: file.name },
+    }));
+    await settle(); tree = render(); h.flushEffects();
+    await settle(); tree = render(); h.flushEffects();
+    assert.equal(draft.fileSnapshot.attachments.length, 1);
+    assert.equal(descendants(tree).find(item => item.type === 'li')!.props.key, rowKey);
+    assert.equal(ownerDocument.activeElement, elsewhere, 'completion must not steal focus after the user leaves');
+    openFile(tree); tree = render();
+    const dialog = descendants(tree).find(item => item.type === 'fixture-dialog-portal')!;
+    (dialog.props.onCloseAutoFocus as (event: unknown) => void)({ preventDefault() {} });
+    assert.equal(ownerDocument.activeElement, trigger,
+      'the original trigger ref survives both keyed reconciliation and local-to-remote component replacement');
+    h.unmount(); frontend.dispose?.();
+  }
+});
+
+test('next focused remove returns to its own add action, rejected removal and late completions cannot steal focus', async () => {
+  for (const ready of [false, true]) {
+    const h = harness();
+    let complete!: (response: Response) => void;
+    h.context.request = async (_path, init) => init?.method === 'POST'
+      ? new Promise(resolve => { complete = resolve; }) : new Response(null, { status: 204 });
+    const frontend = await activateNext(h.context);
+    const draft = new Draft('remove-focus');
+    const file = new File(['synthetic'], 'remove.txt');
+    const render = () => h.render(enhanceComposer(frontend), composerProps(frontend, {
+      draft: draft.reference, operation: 'prompt', disabled: false,
+    }));
+    const result = () => Response.json({
+      fileId, attachment: { type: 'file', path: `/data/files/${fileId}/ready/body.txt`, displayName: file.name },
+    });
+    selectFiles(frontend, { draft: draft.reference, operation: 'prompt', disabled: false }, [file]);
+    if (ready) { complete(result()); await settle(); }
+    let tree = render(); h.flushEffects();
+    const ownerDocument = { activeElement: {} };
+    const add = { isConnected: true, focus() { ownerDocument.activeElement = add; } };
+    (descendants(tree).find(item => item.props['aria-label'] === '添加文件')!.props.ref as (node: unknown) => void)(add);
+    const removal = descendants(tree).find(item => item.props['aria-label'] === `移除 ${file.name}`)!;
+    const focused = { ownerDocument };
+    ownerDocument.activeElement = focused;
+    draft.snapshot = { ...draft.snapshot, pending: true };
+    click(removal, { currentTarget: focused });
+    assert.equal(ownerDocument.activeElement, focused, 'native pending rejects removal without moving focus');
+    draft.snapshot = { ...draft.snapshot, pending: false };
+    click(removal, { currentTarget: focused });
+    assert.equal(ownerDocument.activeElement, add, 'only successful focused removal restores its own add action');
+    tree = render(); h.flushEffects();
+    assert.equal(descendants(tree).some(item => item.type === 'li'), false);
+    const elsewhere = {};
+    ownerDocument.activeElement = elsewhere;
+    if (!ready) { complete(result()); await settle(); }
+    render(); h.flushEffects();
+    assert.equal(draft.fileSnapshot.attachments.length, 0);
+    assert.equal(ownerDocument.activeElement, elsewhere, 'removed work cannot reclaim focus on late completion');
+    h.unmount(); frontend.dispose?.();
+  }
+});
+
+test('next retry completion after switching drafts cannot focus the new owner', async () => {
+  const h = harness();
+  const responses: ((response: Response) => void)[] = [];
+  h.context.request = async () => new Promise(resolve => responses.push(resolve));
+  const frontend = await activateNext(h.context);
+  const first = new Draft('original-focus-owner');
+  const second = new Draft('new-focus-owner');
+  let current = first;
+  const render = () => h.render(enhanceComposer(frontend), composerProps(frontend, {
+    draft: current.reference, operation: 'prompt', disabled: false,
+  }));
+  const file = new File(['synthetic'], 'hidden.txt');
+  selectFiles(frontend, { draft: first.reference, operation: 'prompt', disabled: false }, [file]);
+  responses[0]!(Response.json({ error: 'Synthetic failure' }, { status: 503 }));
+  await settle();
+  let tree = render(); h.flushEffects();
+  click(descendants(tree).find(item => item.props['aria-label'] === `重新上传 ${file.name}`)!);
+  current = second;
+  tree = render(); h.flushEffects();
+  let focused = 0;
+  (descendants(tree).find(item => item.props['aria-label'] === '添加文件')!.props.ref as (node: unknown) => void)(
+    { isConnected: true, focus() { focused++; } });
+  responses[1]!(Response.json({
+    fileId, attachment: { type: 'file', path: `/data/files/${fileId}/ready/body.txt`, displayName: file.name },
+  }));
+  await settle(); render(); h.flushEffects();
+  assert.equal(first.fileSnapshot.attachments.length, 1);
+  assert.equal(second.fileSnapshot.attachments.length, 0);
+  assert.equal(focused, 0);
+  h.signal.abort(); h.unmount(); frontend.dispose?.();
+  assert.equal(focused, 0, 'disposal does not schedule focus recovery');
+});
+
 test('next native blobs retain local bytes, safe media boundaries and URL cleanup', async () => {
   const h = harness();
   const frontend = await activateNext(h.context);
