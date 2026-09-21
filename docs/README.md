@@ -1,6 +1,6 @@
 # Cockpit File 文档
 
-**本次发行源码：cockpit-file 0.1.7，配套 Cockpit 0.2.3 / Web API v2 / 公共 UI v1。**
+**当前准备源码：cockpit-file 0.1.8，配套 Cockpit 0.2.3 / Web API v2 / 公共 UI v1，SDK pin 不变；未声明发布。**
 可下载包以该 tag 的 Release workflow 成功发布的资产为准，发行不自动安装。
 包/后端 API 仍为 v1。本次只迁移 Web 接入，不修改文件捕获、存储或 HTTP 行为。
 远程安装、全局文件库和旧历史补抓不在当前实现中。

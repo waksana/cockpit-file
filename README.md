@@ -19,7 +19,7 @@ Agent 可以照常使用 Markdown 引用文件，不需要学习额外的发送�
 
 ## 当前状态
 
-**本次发行版本为 0.1.7，配套 Cockpit 0.2.3。** 安装包以该 tag 的 Release workflow 成功发布的资产为准。
+**当前准备版本为 0.1.8，配套 Cockpit 0.2.3，SDK pin 不变。** 尚未声明发布；已发布 0.1.7 安装包仍以原 tag 的 Release 资产为准。
 Web 层采用注册 state 服务、
 组件 middleware 和独立 Markdown link/image 渲染器；后端行为不变。
 附件属于文件模块注册的草稿 schema，完整草稿文件列表也由模块提供。

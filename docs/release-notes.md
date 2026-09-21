@@ -1,3 +1,12 @@
+# Cockpit File 0.1.8 (source preparation)
+
+Preview dialogs use native initial focus without redundant React autofocus.
+Retry only moves focus when replacing its own focused action; native modal
+isolation, Escape and return remain unchanged. The two scoped retry continuity
+paths remain intentional. Public API/UI and the exact host SDK pin are unchanged;
+Cockpit 0.2.3 remains the compatible baseline. No tag, publication or deployment
+is implied by this source change.
+
 # Cockpit File 0.1.7
 
 Frontend plugin migration paired with Cockpit **0.2.3**, Web API v2 and Module UI v1.

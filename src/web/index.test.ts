@@ -1171,7 +1171,7 @@ test('a row opens an explicitly closable native dialog and a changed resource cl
   attachDialog();
   assert.equal(shown, 1, 'showModal gives native focus trapping, Escape and return-focus behavior');
   const close = descendants(dialog).find(element => element.type === 'button')!;
-  assert.equal(close.props.autoFocus, true);
+  assert.equal(close.props.autoFocus, undefined, 'showModal selects the first close control without React autofocus');
   (close.props.onClick as () => void)();
   assert.equal(closed, 1);
   tree = render(); h.flushEffects();
@@ -1477,14 +1477,17 @@ test('retry hands focus to the persistent close control before replacing its own
   render(); h.flushEffects(); await settle();
   openFile(render());
   const dialog = descendants(render()).find(element => element.type === 'dialog')!;
-  const close = descendants(dialog).find(element => element.props.autoFocus)!;
+  const close = descendants(dialog).find(element => element.type === 'button')!;
   let focused = 0;
   (close.props.ref as { current: unknown }).current = { focus(options: unknown) {
     assert.deepEqual(options, { preventScroll: true });
     focused++;
   } };
   const retry = descendants(dialog).find(element => element.props.className === 'cf-dialog-retry')!;
-  (retry.props.onClickCapture as () => void)();
+  const capture = retry.props.onClickCapture as (event: unknown) => void;
+  capture({ currentTarget: { contains: () => false, ownerDocument: { activeElement: null } } });
+  assert.equal(focused, 0, 'retry cannot take focus from an unrelated modal control');
+  capture({ currentTarget: { contains: () => true, ownerDocument: { activeElement: {} } } });
   click(descendants(retry).find(element => element.type === 'button')!);
   assert.equal(focused, 1);
   assert.equal(descendants(render()).find(element => element.type === 'dialog')!.props.key, dialog.props.key);
