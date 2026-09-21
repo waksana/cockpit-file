@@ -1,0 +1,146 @@
+.cfn-tray {
+  min-width: 0;
+  color: var(--foreground);
+  padding-block: 0.5rem;
+}
+
+.cfn-tray-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.cfn-list {
+  display: grid;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cfn-list > li {
+  min-width: 0;
+}
+
+.cfn-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.375rem;
+  color: var(--foreground);
+}
+
+.cfn-item-open {
+  flex: 1 1 12rem;
+  min-width: 0;
+  height: auto;
+  min-height: 2.75rem;
+  justify-content: flex-start;
+  white-space: normal;
+  text-align: start;
+}
+
+.cfn-item-copy {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.cfn-name {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.cfn-detail {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.cfn-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+  margin-inline-start: auto;
+}
+
+.cfn-item-error {
+  flex-basis: 100%;
+  padding: 0.25rem;
+  color: var(--destructive);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.cfn-progress {
+  flex-basis: 100%;
+  width: 100%;
+  height: 0.25rem;
+  accent-color: var(--primary);
+}
+
+.cfn-icon {
+  flex: none;
+}
+
+.cfn-reference,
+.cfn-reference-link {
+  display: inline;
+  font: inherit;
+  line-height: inherit;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.cfn-reference-link {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.cfn-reference-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.cfn-reference-status .cfn-icon {
+  display: inline;
+  width: 0.85em;
+  height: 0.85em;
+  margin-inline-start: 0.2em;
+  vertical-align: -0.1em;
+}
+
+.cfn-dialog {
+  overflow-wrap: anywhere;
+}
+
+.cfn-media {
+  display: block;
+  width: 100%;
+  max-height: 65dvh;
+  object-fit: contain;
+}
+
+.cfn-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

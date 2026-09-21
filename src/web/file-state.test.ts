@@ -135,6 +135,43 @@ test('ordered uploads hold the captured draft guard across unmount and session s
   store.dispose();
 });
 
+test('unpersisted work includes hidden drafts, failed Files and insertion failures but not ready attachments', async () => {
+  const { store, calls } = uploadHarness();
+  const hidden = new Draft('hidden');
+  const visible = new Draft('visible');
+  const unmount = store.subscribe(hidden, () => {});
+  assert.equal(store.hasUnpersistedWork(), false);
+  store.receive([new File(['a'], 'a.txt')], composer(hidden));
+  unmount();
+  store.subscribe(visible, () => {});
+  assert.equal(store.hasUnpersistedWork(), true);
+  calls[0]!.response.reject(new Error('offline'));
+  await settle();
+  assert.equal(store.snapshot(hidden).items[0]!.status, 'failed');
+  assert.equal(store.hasUnpersistedWork(), true);
+  store.retry(hidden, 'operation-1');
+  const append = hidden.appendAttachments.bind(hidden);
+  hidden.appendAttachments = () => { throw new Error('draft persistence failed'); };
+  calls[1]!.response.resolve(uploaded('a'));
+  await settle();
+  assert.equal(store.snapshot(hidden).items[0]!.file, undefined);
+  assert.match(store.snapshot(hidden).items[0]!.error!, /draft persistence failed/);
+  assert.equal(store.hasUnpersistedWork(), true, 'saved bytes without a persisted draft remain unfinished');
+  hidden.appendAttachments = append;
+  store.retry(hidden, 'operation-1');
+  assert.equal(hidden.snapshot.attachments.length, 1);
+  assert.equal(store.hasUnpersistedWork(), false);
+  store.receive([new File(['b'], 'b.txt')], composer(visible));
+  assert.equal(store.hasUnpersistedWork(), true);
+  store.remove(visible, 'operation-2');
+  assert.equal(store.hasUnpersistedWork(), false);
+  calls[3]!.response.resolve(new Response(null, { status: 204 }));
+  store.receive([new File(['c'], 'c.txt')], composer(hidden));
+  store.dispose();
+  assert.equal(store.hasUnpersistedWork(), false);
+  assert.equal(calls[4]!.init!.signal!.aborted, true);
+});
+
 test('failed upload retains its File and operation ID for an explicit retry', async () => {
   const { store, calls, errors } = uploadHarness();
   const draft = new Draft('session');

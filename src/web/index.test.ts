@@ -4,11 +4,11 @@ import test from 'node:test';
 import ts from 'typescript';
 import { icons } from './icons.ts';
 import type {
-  ActivateFrontend, AttachmentProps, ComposerEditorProps, ComposerProps, ComposerTarget,
+  ActivateFrontend, ActivateNextFrontend, AttachmentProps, ComposerEditorProps, ComposerProps, ComposerTarget,
   DraftPurpose, DraftReference, DraftSchemaScope, HostSnapshot, MarkdownNode, MarkdownRendererProps, ModuleDraft, ModuleDraftSnapshot,
-  ModuleFrontend, ModuleFrontendContext, ModuleStateRegistry,
+  ModuleFrontend, ModuleFrontendContext, ModuleNextFrontendContext, ModuleStateRegistry, ModuleUi,
 } from '@cockpit/module-api';
-import type { ClipboardEvent, ComponentType, DragEvent } from 'react';
+import type { ClipboardEvent, ComponentType, DragEvent, ReactNode } from 'react';
 import { fileDraftSchema, type FileAttachment, type FileState } from './file-draft.ts';
 
 const source = await readFile(new URL('./index.tsx', import.meta.url), 'utf8');
@@ -19,9 +19,17 @@ const compiled = ts.transpileModule(source, {
   .replaceAll("'./file-state.ts'", JSON.stringify(new URL('./file-state.ts', import.meta.url).href))
   .replaceAll("'./file-draft.ts'", JSON.stringify(new URL('./file-draft.ts', import.meta.url).href))
   .replaceAll("'./file-input.ts'", JSON.stringify(new URL('./file-input.ts', import.meta.url).href))
+  .replaceAll("'./file-services.ts'", JSON.stringify(new URL('./file-services.ts', import.meta.url).href))
   .replaceAll("'./icons.ts'", JSON.stringify(new URL('./icons.ts', import.meta.url).href))
   .replaceAll("'./blob.ts'", JSON.stringify(new URL('./blob.ts', import.meta.url).href));
 const { activate: activateModule } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`) as { activate: ActivateFrontend };
+const nextEntry = new URL('./next/index.tsx', import.meta.url);
+const nextSource = await readFile(nextEntry, 'utf8');
+const nextCompiled = ts.transpileModule(nextSource, {
+  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2023, jsx: ts.JsxEmit.React },
+}).outputText.replace(/from (['"])(\.[^'"]+)\1/g, (_match, _quote, path: string) =>
+  `from ${JSON.stringify(new URL(path, nextEntry).href)}`);
+const { activate: activateNextModule } = await import(`data:text/javascript;base64,${Buffer.from(nextCompiled).toString('base64')}`) as { activate: ActivateNextFrontend };
 const registries = new WeakMap<ModuleStateRegistry, () => void>();
 const contexts = new WeakMap<ModuleFrontend, ModuleFrontendContext>();
 async function activate(context: ModuleFrontendContext) {
@@ -36,6 +44,25 @@ async function activate(context: ModuleFrontendContext) {
     registries.get(context.state)?.();
     throw error;
   }
+}
+
+async function activateNext(context: ModuleFrontendContext) {
+  const component = (tag: string) => (props: Record<string, unknown>) =>
+    props.asChild ? props.children : context.react.createElement(tag, props, props.children as ReactNode);
+  const ui = {
+    version: 1, Button: component('button'), Dialog: component('fixture-dialog'),
+    DialogContent: component('fixture-dialog-portal'), DialogHeader: component('header'),
+    DialogTitle: component('h2'), DialogDescription: component('p'), DialogFooter: component('footer'),
+    Alert: component('fixture-alert'), AlertDescription: component('div'),
+  };
+  // Only the consumed public components are simulated; actual Radix behavior belongs to browser integration.
+  const { uiVersion: _classic, uiSurfaceVersion: _surfaces, ...services } = context;
+  const frontend = await activateNextModule({ ...services, ui: ui as ModuleUi });
+  const dispose = () => { frontend.dispose?.(); registries.get(context.state)?.(); };
+  context.signal.addEventListener('abort', dispose, { once: true });
+  const loaded = { ...frontend, dispose };
+  contexts.set(loaded, context);
+  return loaded;
 }
 const fileId = `f_${'a'.repeat(64)}`;
 const apiBase = `https://host.test/cockpit/_modules/cockpit-file/${'b'.repeat(64)}/api`;
@@ -1511,4 +1538,349 @@ test('retry hands focus to the persistent close control before replacing its own
   assert.equal(focused, 1);
   assert.equal(descendants(render()).find(element => element.type === 'dialog')!.props.key, dialog.props.key);
   h.unmount(); frontend.dispose?.();
+});
+
+test('next activation uses injected public components without classic UI capability claims', async () => {
+  const h = harness();
+  const frontend = await activateNext(h.context);
+  assert.deepEqual(frontend.components!.map(item => item.boundary), ['composer', 'composerEditor', 'attachment']);
+  assert.equal(frontend.markdown!.length, 1);
+  assert.doesNotMatch(nextSource, /ck-|uiSurfaceVersion|uiVersion/);
+  assert.doesNotMatch(nextCompiled, /from ['"](?:react|react-dom|radix-ui|@cockpit\/ui)/);
+  assert.doesNotMatch(source, /next\/|ModuleNextFrontendContext/);
+  const wrong = { ...h.context, ui: { version: 2 } } as unknown as ModuleNextFrontendContext;
+  assert.throws(() => activateNextModule(wrong), /public React UI v1/);
+  frontend.dispose?.();
+});
+
+test('next editor keeps native props and handlers and uses an explicitly non-submit file action', async () => {
+  const h = harness();
+  const frontend = await activateNext(h.context);
+  const draft = new Draft('next-input');
+  const Editor = enhanceEditor(frontend);
+  let inherited = 0;
+  const props = { ...composerProps(frontend, { draft: draft.reference, operation: 'prompt', disabled: false }),
+    children: 'speech action', onPaste: (event: ClipboardEvent<HTMLDivElement>) => { inherited++; event.preventDefault(); } };
+  const tree = h.render(Editor, props);
+  const action = descendants(tree).find(item => item.props['aria-label'] === '添加文件')!;
+  assert.equal(action.props.type, 'button');
+  assert.equal(action.props.disabled, false);
+  assert.ok(JSON.stringify(tree).includes('speech action'));
+  assert.ok(descendants(tree).some(item => item.type === 'textarea'));
+  const event = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  (tree.props.onPaste as (event: unknown) => void)(event);
+  assert.equal(inherited, 1);
+  assert.equal(h.calls.length, 0);
+  draft.snapshot = { ...draft.snapshot, pending: true };
+  const pending = h.render(Editor, props);
+  assert.equal(descendants(pending).find(item => item.props['aria-label'] === '添加文件')!.props.disabled, true);
+  h.unmount(); frontend.dispose?.();
+});
+
+test('both presentations own unload guards for hidden unfinished drafts and remove them on disposal', async () => {
+  for (const start of [activate, activateNext]) {
+    const listeners = new Set<(event: BeforeUnloadEvent) => void>();
+    Object.defineProperty(document, 'defaultView', { configurable: true, value: {
+      addEventListener(type: string, listener: (event: BeforeUnloadEvent) => void) {
+        assert.equal(type, 'beforeunload'); listeners.add(listener);
+      },
+      removeEventListener(type: string, listener: (event: BeforeUnloadEvent) => void) {
+        assert.equal(type, 'beforeunload'); listeners.delete(listener);
+      },
+    } });
+    const h = harness();
+    const frontend = await start(h.context);
+    const draft = new Draft('hidden-unload');
+    const tree = h.render(enhanceEditor(frontend), composerProps(frontend, {
+      draft: draft.reference, operation: 'prompt', disabled: false,
+    }));
+    const upload = descendants(tree).find(item => item.props['aria-label'] === '添加文件')!;
+    click(upload);
+    const input = nativeInputs.at(-1)!;
+    input.files = [new File(['synthetic'], 'hidden.txt')];
+    input.dispatchEvent(new Event('change'));
+    h.unmount();
+    const event = new Event('beforeunload', { cancelable: true }) as BeforeUnloadEvent;
+    Object.defineProperty(event, 'returnValue', { value: 'unchanged', writable: true });
+    assert.equal(listeners.size, 1);
+    for (const listener of listeners) listener(event);
+    assert.equal(event.defaultPrevented, true);
+    assert.equal(h.calls[0]!.init!.signal!.aborted, false, 'asking to leave cannot stop an upload');
+    h.signal.abort();
+    assert.equal(listeners.size, 0);
+    assert.equal(h.calls[0]!.init!.signal!.aborted, true);
+    frontend.dispose?.();
+    Object.defineProperty(document, 'defaultView', { configurable: true, value: undefined });
+  }
+});
+
+test('next file links remain phrasing anchors with native modified clicks and lazy downloads/previews', async () => {
+  const h = harness();
+  h.context.request = async () => new Response(null, { headers: { 'content-type': 'image/png', 'content-length': '42' } });
+  const frontend = await activateNext(h.context);
+  const node: MarkdownNode = { kind: 'image', origin: { sessionId: 'next', messageId: 'media' },
+    target: './image.png', label: 'Long file name '.repeat(30) };
+  const render = () => h.render(frontend.markdown![0]!.component, { node, fallback: 'fallback' });
+  render(); h.flushEffects(); await settle();
+  let tree = render();
+  assert.equal(descendants(tree).some(item => item.type === 'img'), false);
+  const link = descendants(tree).find(item => item.type === 'a')!;
+  assert.match(String(link.props.href), /\/messages\//);
+  assert.equal(descendants(tree).some(item => item.type === 'button'), false);
+  for (const modifiers of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) {
+    assert.equal(click(link, modifiers), false);
+    assert.equal(descendants(render()).some(item => item.type === 'fixture-dialog-portal'), false);
+  }
+  click(link);
+  tree = render(); h.flushEffects();
+  const dialog = descendants(tree).find(item => item.type === 'fixture-dialog-portal')!;
+  assert.equal(dialog.props.showCloseButton, undefined, 'use the host default close button');
+  assert.equal(descendants(dialog).filter(item => item.type === 'img').length, 1);
+  assert.ok(descendants(dialog).some(item => item.props.download === node.label));
+  let restored = 0;
+  (link.props.ref as (element: unknown) => void)({ isConnected: true, focus() { restored++; } });
+  let prevented = false;
+  (dialog.props.onCloseAutoFocus as (event: unknown) => void)({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(restored, 1);
+  h.unmount(); frontend.dispose?.();
+});
+
+test('next media timeout retains download and retry focus targets stable content, not a private close selector', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100 });
+  const h = harness();
+  h.context.request = async () => new Response(null, { headers: { 'content-type': 'image/png' } });
+  const frontend = await activateNext(h.context);
+  const node: MarkdownNode = { kind: 'link', origin: { sessionId: 'next', messageId: 'timeout' }, target: './image.png', label: 'Image' };
+  const render = () => h.render(frontend.markdown![0]!.component, { node, fallback: 'fallback' });
+  render(); h.flushEffects(); await settle();
+  openFile(render());
+  let tree = render(); h.flushEffects();
+  const oldMedia = descendants(tree).find(item => item.type === 'img')!;
+  t.mock.timers.tick(5_001);
+  tree = render();
+  assert.ok(JSON.stringify(tree).includes('预览加载超时'));
+  assert.ok(descendants(tree).some(item => item.props.download === 'Image'));
+  const dialog = descendants(tree).find(item => item.type === 'fixture-dialog-portal')!;
+  let focused = 0;
+  (dialog.props.ref as { current: unknown }).current = { focus() { focused++; } };
+  const retry = descendants(tree).find(item => item.props.className === 'cfn-retry')!;
+  const capture = retry.props.onClickCapture as (event: unknown) => void;
+  capture({ currentTarget: { contains: () => false, ownerDocument: { activeElement: {} } } });
+  assert.equal(focused, 0);
+  capture({ currentTarget: { contains: () => true, ownerDocument: { activeElement: {} } } });
+  assert.equal(focused, 1);
+  click(descendants(retry).find(item => item.type === 'button')!);
+  tree = render(); h.flushEffects();
+  (oldMedia.props.onLoad as () => void)();
+  assert.ok(JSON.stringify(render()).includes('正在加载预览'));
+  (descendants(tree).find(item => item.type === 'img')!.props.onLoad as () => void)();
+  assert.equal(JSON.stringify(render()).includes('正在加载预览'), false);
+  h.unmount(); frontend.dispose?.();
+});
+
+test('next draft dialog returns to its own add-file action when upload completion or removal replaces its trigger', async () => {
+  const h = harness();
+  const frontend = await activateNext(h.context);
+  const draft = new Draft('focus-draft');
+  draft.appendAttachments([{ id: 'ready', value: { type: 'directory', path: '/synthetic', displayName: 'Folder' } }]);
+  const render = () => h.render(enhanceComposer(frontend), composerProps(frontend, {
+    draft: draft.reference, operation: 'prompt', disabled: false,
+  }));
+  let tree = render();
+  let restored = 0;
+  const add = descendants(tree).find(item => item.props['aria-label'] === '添加文件')!;
+  (add.props.ref as (element: unknown) => void)({ isConnected: true, focus() { restored++; } });
+  openFile(tree);
+  tree = render();
+  const dialog = descendants(tree).find(item => item.type === 'fixture-dialog-portal')!;
+  (dialog.props.onCloseAutoFocus as (event: unknown) => void)({ preventDefault() {} });
+  assert.equal(restored, 1);
+  (add.props.ref as (element: unknown) => void)(null);
+  (dialog.props.onCloseAutoFocus as (event: unknown) => void)({ preventDefault() {} });
+  assert.equal(restored, 1, 'a hidden/unmounted draft cannot move focus into a different composer');
+  h.unmount(); frontend.dispose?.();
+});
+
+test('next upload retry retains its file trigger through repeated failure, persistence and resource replacement', async () => {
+  for (const mime of ['image/png', 'text/plain']) {
+    const h = harness();
+    const responses: ((response: Response) => void)[] = [];
+    h.context.request = async (_path, init) => init?.method === 'HEAD'
+      ? new Response(null, { headers: { 'content-type': mime } })
+      : new Promise(resolve => responses.push(resolve));
+    const frontend = await activateNext(h.context);
+    const draft = new Draft('retry-focus');
+    const file = new File(['synthetic bytes'], 'fail-once-synthetic-image-with-a-long-file-name.png', { type: mime });
+    const render = () => h.render(enhanceComposer(frontend), composerProps(frontend, {
+      draft: draft.reference, operation: 'prompt', disabled: false,
+    }));
+    selectFiles(frontend, { draft: draft.reference, operation: 'prompt', disabled: false }, [file]);
+    let tree = render(); h.flushEffects();
+    const rowKey = descendants(tree).find(item => item.type === 'li')!.props.key;
+    const ownerDocument = { activeElement: {} };
+    const trigger = { isConnected: true, focus() { ownerDocument.activeElement = trigger; } };
+    (descendants(tree).find(item => item.props['aria-haspopup'] === 'dialog')!.props.ref as (node: unknown) => void)(trigger);
+    const retryUpload = (focused: boolean) => {
+      const retry = descendants(tree).find(item => item.props['aria-label'] === `重新上传 ${file.name}`)!;
+      assert.ok(retry);
+      const wrapper = descendants(tree).find(item => item.props.onClickCapture && descendants(item).includes(retry))!;
+      (wrapper.props.onClickCapture as (event: unknown) => void)({
+        currentTarget: { ownerDocument, contains: () => focused },
+      });
+      click(retry);
+      tree = render(); h.flushEffects();
+      assert.equal(descendants(tree).some(item => item.props['aria-label'] === `重新上传 ${file.name}`), false);
+      assert.equal(descendants(tree).find(item => item.type === 'li')!.props.key, rowKey);
+    };
+    responses[0]!(Response.json({ error: 'Synthetic upload failure' }, { status: 503 }));
+    await settle(); tree = render(); h.flushEffects();
+    retryUpload(true);
+    assert.equal(ownerDocument.activeElement, trigger, 'focus moves before the retry action disappears');
+    responses[1]!(Response.json({ error: 'Synthetic repeated failure' }, { status: 503 }));
+    await settle(); tree = render(); h.flushEffects();
+    assert.equal(ownerDocument.activeElement, trigger, 'repeated failure keeps the same useful focus target');
+    const elsewhere = {};
+    ownerDocument.activeElement = elsewhere;
+    retryUpload(false);
+    assert.equal(ownerDocument.activeElement, elsewhere, 'programmatic/unfocused retry cannot claim focus');
+    responses[2]!(Response.json({
+      fileId, attachment: { type: 'file', path: `/data/files/${fileId}/ready/body.png`, displayName: file.name },
+    }));
+    await settle(); tree = render(); h.flushEffects();
+    await settle(); tree = render(); h.flushEffects();
+    assert.equal(draft.fileSnapshot.attachments.length, 1);
+    assert.equal(descendants(tree).find(item => item.type === 'li')!.props.key, rowKey);
+    assert.equal(ownerDocument.activeElement, elsewhere, 'completion must not steal focus after the user leaves');
+    openFile(tree); tree = render();
+    const dialog = descendants(tree).find(item => item.type === 'fixture-dialog-portal')!;
+    (dialog.props.onCloseAutoFocus as (event: unknown) => void)({ preventDefault() {} });
+    assert.equal(ownerDocument.activeElement, trigger,
+      'the original trigger ref survives both keyed reconciliation and local-to-remote component replacement');
+    h.unmount(); frontend.dispose?.();
+  }
+});
+
+test('next focused remove returns to its own add action, rejected removal and late completions cannot steal focus', async () => {
+  for (const ready of [false, true]) {
+    const h = harness();
+    let complete!: (response: Response) => void;
+    h.context.request = async (_path, init) => init?.method === 'POST'
+      ? new Promise(resolve => { complete = resolve; }) : new Response(null, { status: 204 });
+    const frontend = await activateNext(h.context);
+    const draft = new Draft('remove-focus');
+    const file = new File(['synthetic'], 'remove.txt');
+    const render = () => h.render(enhanceComposer(frontend), composerProps(frontend, {
+      draft: draft.reference, operation: 'prompt', disabled: false,
+    }));
+    const result = () => Response.json({
+      fileId, attachment: { type: 'file', path: `/data/files/${fileId}/ready/body.txt`, displayName: file.name },
+    });
+    selectFiles(frontend, { draft: draft.reference, operation: 'prompt', disabled: false }, [file]);
+    if (ready) { complete(result()); await settle(); }
+    let tree = render(); h.flushEffects();
+    const ownerDocument = { activeElement: {} };
+    const add = { isConnected: true, focus() { ownerDocument.activeElement = add; } };
+    (descendants(tree).find(item => item.props['aria-label'] === '添加文件')!.props.ref as (node: unknown) => void)(add);
+    const removal = descendants(tree).find(item => item.props['aria-label'] === `移除 ${file.name}`)!;
+    const focused = { ownerDocument };
+    ownerDocument.activeElement = focused;
+    draft.snapshot = { ...draft.snapshot, pending: true };
+    click(removal, { currentTarget: focused });
+    assert.equal(ownerDocument.activeElement, focused, 'native pending rejects removal without moving focus');
+    draft.snapshot = { ...draft.snapshot, pending: false };
+    click(removal, { currentTarget: focused });
+    assert.equal(ownerDocument.activeElement, add, 'only successful focused removal restores its own add action');
+    tree = render(); h.flushEffects();
+    assert.equal(descendants(tree).some(item => item.type === 'li'), false);
+    const elsewhere = {};
+    ownerDocument.activeElement = elsewhere;
+    if (!ready) { complete(result()); await settle(); }
+    render(); h.flushEffects();
+    assert.equal(draft.fileSnapshot.attachments.length, 0);
+    assert.equal(ownerDocument.activeElement, elsewhere, 'removed work cannot reclaim focus on late completion');
+    h.unmount(); frontend.dispose?.();
+  }
+});
+
+test('next retry completion after switching drafts cannot focus the new owner', async () => {
+  const h = harness();
+  const responses: ((response: Response) => void)[] = [];
+  h.context.request = async () => new Promise(resolve => responses.push(resolve));
+  const frontend = await activateNext(h.context);
+  const first = new Draft('original-focus-owner');
+  const second = new Draft('new-focus-owner');
+  let current = first;
+  const render = () => h.render(enhanceComposer(frontend), composerProps(frontend, {
+    draft: current.reference, operation: 'prompt', disabled: false,
+  }));
+  const file = new File(['synthetic'], 'hidden.txt');
+  selectFiles(frontend, { draft: first.reference, operation: 'prompt', disabled: false }, [file]);
+  responses[0]!(Response.json({ error: 'Synthetic failure' }, { status: 503 }));
+  await settle();
+  let tree = render(); h.flushEffects();
+  click(descendants(tree).find(item => item.props['aria-label'] === `重新上传 ${file.name}`)!);
+  current = second;
+  tree = render(); h.flushEffects();
+  let focused = 0;
+  (descendants(tree).find(item => item.props['aria-label'] === '添加文件')!.props.ref as (node: unknown) => void)(
+    { isConnected: true, focus() { focused++; } });
+  responses[1]!(Response.json({
+    fileId, attachment: { type: 'file', path: `/data/files/${fileId}/ready/body.txt`, displayName: file.name },
+  }));
+  await settle(); render(); h.flushEffects();
+  assert.equal(first.fileSnapshot.attachments.length, 1);
+  assert.equal(second.fileSnapshot.attachments.length, 0);
+  assert.equal(focused, 0);
+  h.signal.abort(); h.unmount(); frontend.dispose?.();
+  assert.equal(focused, 0, 'disposal does not schedule focus recovery');
+});
+
+test('next native blobs retain local bytes, safe media boundaries and URL cleanup', async () => {
+  const h = harness();
+  const frontend = await activateNext(h.context);
+  const urlCreates: string[] = [];
+  const revoked: string[] = [];
+  const create = URL.createObjectURL;
+  const revoke = URL.revokeObjectURL;
+  URL.createObjectURL = () => { const url = `blob:fixture-${urlCreates.length}`; urlCreates.push(url); return url; };
+  URL.revokeObjectURL = url => { revoked.push(url); };
+  try {
+    let node: NativeFixture = { kind: 'attachment', origin: { sessionId: 'next', messageId: 'blob' },
+      label: 'Audio', attachment: { type: 'blob', mimeType: 'audio/wav', data: btoa('synthetic audio') } };
+    const render = () => h.render(nativeComponent(frontend), { node });
+    render(); h.flushEffects();
+    let tree = render();
+    assert.equal(descendants(tree).some(item => item.type === 'audio'), false);
+    assert.equal(h.calls.length, 0);
+    openFile(tree);
+    tree = render(); h.flushEffects();
+    const media = descendants(tree).find(item => item.type === 'audio')!;
+    assert.equal(media.props.controls, true);
+    assert.equal(media.props.autoPlay, undefined);
+    node = { ...node, attachment: { type: 'blob', mimeType: 'text/html', data: btoa('<script>never execute</script>') } };
+    render(); h.flushEffects();
+    tree = render();
+    assert.equal(descendants(tree).some(item => item.type === 'fixture-dialog-portal'), false);
+    openFile(tree);
+    assert.equal(descendants(render()).some(item => ['iframe', 'object', 'embed', 'img', 'audio', 'video'].includes(String(item.type))), false);
+    h.unmount(); frontend.dispose?.();
+    assert.deepEqual(revoked, urlCreates);
+  } finally {
+    URL.createObjectURL = create;
+    URL.revokeObjectURL = revoke;
+  }
+});
+
+test('next assets are separate, use only inherited theme tokens and keep complete narrow-screen names', async () => {
+  const css = await readFile(new URL('./next/styles.css', import.meta.url), 'utf8');
+  const manifest = JSON.parse(await readFile(new URL('../../cockpit.module.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.frontend.entry, 'dist/web/index.js');
+  assert.deepEqual(manifest.frontend.styles, ['dist/web/styles.css']);
+  assert.equal(manifest.frontend.next.entry, 'dist/web/next/index.js');
+  assert.deepEqual(manifest.frontend.next.styles, ['dist/web/next/styles.css']);
+  assert.doesNotMatch(css, /@import|@tailwind|--ck-|--host-|\.ck-|(?:^|\n)(?:body|html|:root|\.dark)\s*[{,]/);
+  assert.match(css, /\.cfn-name\s*\{[^}]*overflow-wrap:\s*anywhere;/);
+  assert.match(css, /\.cfn-item-actions\s*\{[^}]*flex-wrap:\s*wrap;/);
+  assert.doesNotMatch(css, /text-overflow:\s*ellipsis|flex-direction:\s*.*reverse/);
 });

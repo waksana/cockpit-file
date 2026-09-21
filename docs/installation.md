@@ -1,9 +1,22 @@
 # 下载、构建与安装
 
-**cockpit-file 0.1.9 准备源码要求新增 shared-surfaces v1。** 精确宿主源码为
-`9fd5204bda99a8bd65b2c5ef152cc47ce87837d5`，导出 SDK 版本 0.2.6。
-这不是历史 Release 已支持的声明。当前源码要求 Web API v2、公共 UI v1、
-`context.uiSurfaceVersion === 1` 与 `context.createPortal`，激活前缺少任一能力均拒绝。
+## 新版集成状态
+
+本分支准备版本为 **0.2.0**，最低配套宿主为具有独立新呈现支持的 **Cockpit 0.3.0**。
+新入口要求 `ModuleNextFrontendContext` / `ModuleFrontendServices` / 公共 React UI v1
+与双入口 manifest。旧宿主可能拒绝 `frontend.next`，不能因为保留经典入口就声称旧宿主兼容。
+SDK 精确固定为已提交且可独立取得的
+`0fa433d99c053df2caf80770f0f8762b9ed7002e`，module-api/protocol 版本均为 **0.3.0**。
+这是公共协议与组件基础提交，最终宿主应用仍由配套集成交付；不表示已发布或部署。
+
+构建分别输出 `dist/web/index.js` / `styles.css` 和
+`dist/web/next/index.js` / `styles.css`；都位于已有公开 asset 根。
+模块只打包自身逻辑和布局样式，公共 React/shadcn 组件和主题由宿主提供。
+两套呈现使用相同既有草稿编码；切换不执行存储迁移。
+
+经典入口继续要求 Web API v2、公共 UI v1、
+`context.uiSurfaceVersion === 1` 与 `context.createPortal`，激活前缺少任一能力均拒绝；
+新版检查 Web API v2、独立 `context.ui.version === 1` 与 draft schema 能力。
 模块包和后端 API 仍为 v1，后端行为没有随本次 Web 迁移改变。
 前端 context/返回声明必须是 API v2；不能仅凭宿主版本号或后端 API v1 推断支持。
 公共规则见宿主[模块 UI 指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md)。
@@ -60,8 +73,8 @@ pnpm package
 当前准备源码的默认输出（不表示已发布）：
 
 ```text
-module-output/cockpit-file-0.1.9.tgz
-module-output/cockpit-file-0.1.9.tgz.sha256
+module-output/cockpit-file-0.2.0.tgz
+module-output/cockpit-file-0.2.0.tgz.sha256
 ```
 
 输出目录必须不存在，也可以 `pnpm package /absolute/new/output` 指定新目录。
