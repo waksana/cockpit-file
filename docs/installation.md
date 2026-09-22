@@ -2,7 +2,7 @@
 
 ## 新版集成状态
 
-本分支准备版本为 **0.2.0**，最低配套宿主为具有独立新呈现支持的 **Cockpit 0.3.0**。
+本分支准备版本为 **0.2.1**，最低配套宿主为具有独立新呈现支持的 **Cockpit 0.3.0**。
 新入口要求 `ModuleNextFrontendContext` / `ModuleFrontendServices` / 公共 React UI v1
 与双入口 manifest。旧宿主可能拒绝 `frontend.next`，不能因为保留经典入口就声称旧宿主兼容。
 SDK 精确固定为已提交且可独立取得的
@@ -73,8 +73,8 @@ pnpm package
 当前准备源码的默认输出（不表示已发布）：
 
 ```text
-module-output/cockpit-file-0.2.0.tgz
-module-output/cockpit-file-0.2.0.tgz.sha256
+module-output/cockpit-file-0.2.1.tgz
+module-output/cockpit-file-0.2.1.tgz.sha256
 ```
 
 输出目录必须不存在，也可以 `pnpm package /absolute/new/output` 指定新目录。
@@ -93,7 +93,7 @@ React 与 portal 渲染器由宿主注入，
 ```sh
 node --import ./apps/server/node_modules/tsx/dist/loader.mjs \
   apps/server/src/module-cli.ts install \
-  /absolute/path/cockpit-file-0.1.7.tgz --trust-local-code --enable
+  /absolute/path/cockpit-file-0.2.1.tgz --trust-local-code --enable
 ```
 
 该确认表示信任本地代码，不是密码、签名验证或安全沙箱。
@@ -107,6 +107,11 @@ node --import ./apps/server/node_modules/tsx/dist/loader.mjs apps/server/src/ind
 
 如果服务已经运行，需要在用户授权后让旧实例正常退出，再启动新实例。
 安装/启用不会热加载；不要覆盖运行中的代码，也不要为安装清空会话或迁移原生数据。
+也可只预安装并选中新版本，保留当前实例直到用户另行授权的正常退出。
+此时 installed/selected 是新版本，active 仍是旧版本；不是已经上线。
+安装前后使用同一真实 `COCKPIT_HOME` 查询并保留配置、包摘要与实例身份记录。
+需要撤回待生效选择时，使用 `module-cli.ts enable cockpit-file --version <旧版本> --digest <旧摘要>`，
+保留当前配置参数和其他模块选择；不要整份覆盖历史配置。
 本模块使用本体已有的 Copilot 认证，不增加文件模块账号或登录流程。
 
 ## 4. 数据根与配置

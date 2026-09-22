@@ -1,6 +1,6 @@
 # Cockpit File 文档
 
-**当前准备源码：cockpit-file 0.2.0，最低配套宿主 Cockpit 0.3.0（支持独立新版呈现）。**
+**当前准备源码：cockpit-file 0.2.1，最低配套宿主 Cockpit 0.3.0（支持独立新版呈现）。**
 新增呈现与经典共用业务服务，不复制后端；双入口、组件与浏览器离开保护见
 [前端接入契约](frontend-contract.md#independent-next-ui)。
 两套呈现的既有持久化草稿编码不变。旧宿主可能拒绝 `frontend.next`。

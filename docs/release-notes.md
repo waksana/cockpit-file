@@ -1,3 +1,19 @@
+# Cockpit File 0.2.1 (source preparation)
+
+Prepare a fresh immutable patch package for the file-size labels merged in
+[PR #31](https://github.com/waksana/cockpit-file/pull/31); do not replace 0.2.0 bytes.
+Both classic and new presentations put known sizes in parentheses after file
+names in draft/message attachments, managed Markdown references and detail
+titles. Empty files show `(0 B)`; unknown sizes stay absent. Existing upload/HEAD
+metadata supplies sizes without extra body downloads or duplicate size rows.
+
+The minimum paired host remains **Cockpit 0.3.0 with new-presentation support**,
+with the unchanged SDK pin `0fa433d99c053df2caf80770f0f8762b9ed7002e`.
+Backend behavior, module configuration and persisted draft/file data are unchanged;
+no migration is required. This source preparation does not publish a tag or Release.
+An authorized install can select this package for the next normal start without
+changing the running instance; installed/selected is not active deployment.
+
 # Cockpit File 0.2.0
 
 Source preparation, not a published release or deployment. Minimum paired host:
