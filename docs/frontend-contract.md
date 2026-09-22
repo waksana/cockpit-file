@@ -7,7 +7,7 @@
 `frontend.next.entry/styles` 声明独立输出，共用现有 `frontend.assets` 根。
 经典仍使用 `src/web/index.tsx` 和原 `styles.css`；两套入口只加载各自的呈现，
 缺少新版的模块不能借经典呈现补位。以下原有具体外观说明属于经典界面，不约束新版布局。
-本分支准备版本为 **0.2.0**，最低配套宿主为支持新版呈现的 **Cockpit 0.3.0**。
+本分支准备版本为 **0.2.1**，最低配套宿主为支持新版呈现的 **Cockpit 0.3.0**。
 SDK 固定为 `0fa433d99c053df2caf80770f0f8762b9ed7002e`，该基础提交不表示最终宿主应用
 或 Release 已完成。旧宿主可能拒绝双入口 manifest，经典回退也需要支持该 manifest 的宿主。
 
