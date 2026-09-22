@@ -103,7 +103,7 @@ export const activate: ActivateFrontend = context => {
           const actions = <button type="button" className="ck-icon-button ck-danger" disabled={disabled} title="移除"
             onClick={() => uploads.remove(composer.draft, item.id)} aria-label={`移除 ${item.name}`}><ActionIcon name="remove" /></button>;
           const props = {
-            name: item.name, actions, retry, download: false, error: item.error,
+            name: item.name, size: item.size, actions, retry, download: false, error: item.error,
             errorLabel: '上传失败',
             busy: item.status === 'uploading',
             status: item.status === 'uploading' ? '上传中' : item.status === 'ready' ? '已上传，等待加入草稿' : '上传未完成',
@@ -112,7 +112,7 @@ export const activate: ActivateFrontend = context => {
             {item.url ? <FileCard {...props} url={item.url} />
               : item.file && previewKind(item.file.type) === 'image'
                 ? <BlobCard {...props} file={item.file} />
-                : <FileTile {...props} metadata={formatBytes(item.size)} />}
+                : <FileTile {...props} />}
           </li>;
         })}
       </ul>}
@@ -121,6 +121,7 @@ export const activate: ActivateFrontend = context => {
 
   interface CardProps {
     name: string;
+    size?: number;
     actions?: ReactNode;
     retry?: ReactNode;
     status?: string;
@@ -145,7 +146,7 @@ export const activate: ActivateFrontend = context => {
     timeout?: ReturnType<typeof setTimeout>;
   }
 
-  function FileTile({ name, status, error, errorLabel = '文件异常', busy = false, metadata, actions, retry,
+  function FileTile({ name, size, status, error, errorLabel = '文件异常', busy = false, metadata, actions, retry,
     preview, inline = false, href, downloadUrl, identity = name }: CardProps & {
     metadata?: string; preview?: Preview; href?: string; downloadUrl?: string; identity?: string | object;
   }) {
@@ -169,6 +170,8 @@ export const activate: ActivateFrontend = context => {
     const extension = suffix && suffix.index > 0 ? suffix[0] : '';
     const stem = extension ? name.slice(0, -extension.length) : name;
     const information = [status, metadata].filter(Boolean).join(' · ');
+    const sizeLabel = size !== undefined ? ` (${formatBytes(size)})` : '';
+    const description = [sizeLabel.trim(), failure || information].filter(Boolean).join(' · ');
     const summary = error ? errorLabel : mediaError ? '预览失败' : mediaLoading ? '预览中'
       : busy ? status || '检查中' : status && status !== '准备就绪' ? status : metadata || status || '文件';
     const fileIcon = preview?.kind === 'image' ? 'image' : preview?.kind === 'video' || preview?.kind === 'audio' ? 'play'
@@ -231,7 +234,7 @@ export const activate: ActivateFrontend = context => {
       title="下载" aria-label={`下载 ${name}`}><ActionIcon name="download" /></a>;
     return <span className={inline ? 'cf-reference' : 'cf-row'} aria-busy={busy || mediaLoading}>
       {inline ? <a className="cf-reference-link" href={href} aria-label={label} aria-haspopup="dialog"
-        aria-description={failure || information} title={failure || name}
+        aria-description={description} title={failure || name}
         onClick={event => {
           if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.defaultPrevented) return;
           event.preventDefault();
@@ -239,15 +242,19 @@ export const activate: ActivateFrontend = context => {
         }}>
         <span className="cf-reference-icon" aria-hidden="true"><Icon name={fileIcon} /></span>
         <span className="cf-reference-name">{name}</span>
+        {sizeLabel}
         <span className={`cf-reference-state${failure ? ' cf-error' : ''}`} aria-hidden="true">
           <Icon name={failure ? 'circle-alert' : busy || mediaLoading ? 'loader-circle' : 'arrow-up-right'} />
         </span>
       </a> : <>
         <button ref={rowTrigger} type="button" className="ck-button cf-row-open" aria-label={label} aria-haspopup="dialog"
-          aria-description={failure || information} title={name} onClick={begin}>
+          aria-description={description} title={name} onClick={begin}>
           <span className="cf-file-icon" aria-hidden="true"><Icon small name={fileIcon} /></span>
           <span className="cf-row-name">
-            <span className="cf-name-stem" dir="auto">{stem}</span>{extension && <bdi className="cf-name-extension">{extension}</bdi>}
+            <span className="cf-name-text">
+              <span className="cf-name-stem" dir="auto">{stem}</span>{extension && <bdi className="cf-name-extension">{extension}</bdi>}
+            </span>
+            {sizeLabel && <span className="cf-name-size">{sizeLabel}</span>}
           </span>
           <span className={`ck-status-text cf-row-status ${failure ? 'ck-danger' : 'ck-text-secondary'}`} title={failure || information}>{summary}</span>
           {(busy || mediaLoading) && <progress className="cf-progress" aria-label={`${name}：${summary}`} />}
@@ -261,7 +268,7 @@ export const activate: ActivateFrontend = context => {
       {open && page?.body && createPortal(<dialog key={expanded.revision} ref={dialog} className="ck-surface ck-modal cf-preview-dialog" aria-label={`${preview && !failure ? '预览' : '文件详情'} ${name}`}
         onClose={() => setExpanded(current => current === expanded ? undefined : current)}>
         <header className="ck-actions cf-dialog-header">
-          <h2 className="ck-heading cf-dialog-name" dir="auto">{name}</h2>
+          <h2 className="ck-heading cf-dialog-name" dir="auto">{name}{sizeLabel}</h2>
           <button ref={closeButton} type="button" className="ck-button" onClick={() => dialog.current?.close()}>
             <Icon small name="x" />
             {preview && !failure ? '关闭预览' : '关闭详情'}
@@ -301,20 +308,21 @@ export const activate: ActivateFrontend = context => {
     }
   }
 
-  function FileCard({ url, name, actions, retry, status, busy, error, errorLabel, inline, download = true }: CardProps & { url: string }) {
+  function FileCard({ url, name, size, actions, retry, status, busy, error, errorLabel, inline, download = true }: CardProps & { url: string }) {
     const state = React.useSyncExternalStore(
       React.useCallback(listener => probes.subscribe(url, listener), [url]),
       React.useCallback(() => probes.snapshot(url), [url]),
     );
     const kind = state.mime ? previewKind(state.mime) : null;
     const loading = state.status === 'pending';
+    const bytes = state.size ?? size;
     const checkErrorLabel = state.failure?.kind === 'timeout' ? '检查超时'
       : state.failure?.kind === 'network' ? '请求失败'
         : state.failure?.kind === 'http' && [401, 403].includes(state.failure.status) ? '无访问权限'
           : state.failure?.kind === 'http' && state.failure.status === 422 ? '捕获失败' : '检查失败';
     return <FileTile name={name} identity={url} href={url} inline={inline} busy={busy ?? loading}
       status={status || (loading ? '检查中' : undefined)}
-      metadata={state.size !== undefined ? formatBytes(state.size) : state.mime}
+      size={bytes} metadata={bytes === undefined ? state.mime : undefined}
       error={error || state.error}
       errorLabel={error ? errorLabel : checkErrorLabel}
       preview={state.status === 'ready' && kind ? {
@@ -333,7 +341,7 @@ export const activate: ActivateFrontend = context => {
     file?: File;
   } & ({ url: string; size: number; mime: string; error?: string } | { url?: undefined; error: string });
 
-  function BlobCard({ attachment, file, name, actions, retry, status, busy, error: uploadError, errorLabel, download = true }: CardProps & {
+  function BlobCard({ attachment, file, name, size, actions, retry, status, busy, error: uploadError, errorLabel, download = true }: CardProps & {
     attachment?: NativeBlob; file?: File;
   }) {
     const [state, setState] = React.useState<BlobState>();
@@ -371,7 +379,7 @@ export const activate: ActivateFrontend = context => {
     const loading = !error && !current;
     return <FileTile name={name} identity={identity} busy={busy ?? loading}
       status={status || (loading ? '检查中' : undefined)}
-      metadata={resource ? formatBytes(resource.size) : file ? formatBytes(file.size) : undefined}
+      size={resource?.size ?? file?.size ?? size}
       error={uploadError || (error ? `${resource ? '' : '附件不可用：'}${error}` : undefined)}
       errorLabel={uploadError ? errorLabel : '附件不可用'}
       preview={kind && resource ? {

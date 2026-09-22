@@ -23,6 +23,7 @@
 .cf-row {
   --cf-actions-width: calc(2 * var(--ck-control-size));
   --cf-status-width: 4.5rem;
+  container: cf-row / inline-size;
   display: inline-grid;
   box-sizing: border-box;
   grid-template-columns: minmax(0, 1fr) var(--cf-actions-width);
@@ -63,6 +64,11 @@
   white-space: nowrap;
 }
 
+.cf-name-text {
+  display: flex;
+  min-width: 0;
+}
+
 .cf-name-stem {
   min-width: 0;
   overflow: hidden;
@@ -74,6 +80,11 @@
   max-width: 45%;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.cf-name-size {
+  flex: none;
+  white-space: pre;
 }
 
 .cf-row-status {
@@ -109,6 +120,38 @@
   display: grid;
   place-items: center;
   min-width: 0;
+}
+
+@container cf-row (max-width: 26rem) {
+  .cf-row-open {
+    grid-template-columns: 1.25rem minmax(0, 1fr);
+    grid-template-rows: 1fr 1fr;
+    row-gap: 0;
+  }
+
+  .cf-file-icon {
+    grid-row: 1 / 3;
+  }
+
+  .cf-row-name {
+    align-self: end;
+    line-height: 1.2;
+  }
+
+  .cf-name-stem {
+    min-width: 1ch;
+  }
+
+  .cf-row-status {
+    grid-column: 2;
+    align-self: start;
+    text-align: start;
+    line-height: 1.2;
+  }
+
+  .cf-progress {
+    right: 0.25rem;
+  }
 }
 
 .cf-reference,
