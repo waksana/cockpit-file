@@ -43,6 +43,7 @@ export const activate: ActivateNextFrontend = context => {
 
   interface ItemProps {
     name: string;
+    size?: number;
     status?: string;
     error?: string;
     busy?: boolean;
@@ -59,7 +60,7 @@ export const activate: ActivateNextFrontend = context => {
     kind: 'image' | 'video' | 'audio';
   }
 
-  function FileItem({ name, status, error, busy = false, actions, retry, inline = false, metadata,
+  function FileItem({ name, size, status, error, busy = false, actions, retry, inline = false, metadata,
     preview, href, downloadUrl, restoreFocus, identity = href ?? name }: ItemProps & {
     metadata?: string; preview?: Preview; href?: string; downloadUrl?: string; identity?: string | object;
   }) {
@@ -79,6 +80,8 @@ export const activate: ActivateNextFrontend = context => {
     const loading = !!mediaKey && (!currentMedia || currentMedia.status === 'pending');
     const failure = error || mediaError;
     const information = [status, metadata].filter(Boolean).join(' · ');
+    const sizeLabel = size !== undefined ? ` (${formatBytes(size)})` : '';
+    const description = [sizeLabel.trim(), failure || information].filter(Boolean).join(' · ');
     const label = preview ? `${preview.kind === 'image' ? '预览' : '播放'} ${name}` : `文件详情：${name}`;
     const begin = () => {
       if (services.disposed || context.signal.aborted) return;
@@ -131,19 +134,19 @@ export const activate: ActivateNextFrontend = context => {
     }}>
       <span className={inline ? 'cfn-reference' : 'cfn-item'} aria-busy={busy || loading}>
         {inline ? <a ref={element => { trigger.current = element; }} className="cfn-reference-link"
-          href={href} aria-haspopup="dialog" aria-label={label} aria-description={failure || information}
+          href={href} aria-haspopup="dialog" aria-label={label} aria-description={description}
           onClick={event => {
             if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.defaultPrevented) return;
             event.preventDefault();
             begin();
-          }}>{name}<span className="cfn-reference-status" aria-hidden="true">
+          }}>{name}{sizeLabel}<span className="cfn-reference-status" aria-hidden="true">
             <Icon name={failure ? 'circle-alert' : busy || loading ? 'loader-circle' : 'arrow-up-right'} />
           </span></a> : <>
           <Button ref={element => { trigger.current = element; }} type="button" variant="ghost" className="cfn-item-open"
-            aria-haspopup="dialog" aria-label={label} aria-description={failure || information} onClick={begin}>
+            aria-haspopup="dialog" aria-label={label} aria-description={description} onClick={begin}>
             <Icon name={icon} />
             <span className="cfn-item-copy">
-              <span className="cfn-name" dir="auto">{name}</span>
+              <span className="cfn-name" dir="auto">{name}{sizeLabel}</span>
               <span className="cfn-detail">{information || '文件'}</span>
             </span>
           </Button>
@@ -168,7 +171,7 @@ export const activate: ActivateNextFrontend = context => {
             else restoreFocus?.();
           }}>
           <DialogHeader>
-            <DialogTitle className="cfn-name" dir="auto">{name}</DialogTitle>
+            <DialogTitle className="cfn-name" dir="auto">{name}{sizeLabel}</DialogTitle>
             <DialogDescription>{information || '文件详情'}</DialogDescription>
           </DialogHeader>
           {failure && <Alert variant="destructive"><AlertDescription>{failure}</AlertDescription></Alert>}
@@ -199,7 +202,6 @@ export const activate: ActivateNextFrontend = context => {
     url?: string;
     attachment?: NativeBlob;
     file?: File;
-    size?: number;
   }
 
   function FileCard({ url, attachment, file, size, error, busy, status, retry, download = true, ...props }: ResourceProps) {
@@ -236,13 +238,13 @@ export const activate: ActivateNextFrontend = context => {
     const current = resource?.identity === identity ? resource : undefined;
     const failure = url ? state?.error : unavailable || current?.error;
     const mime = url ? state?.mime : current?.mime;
-    const bytes = url ? state?.size : current?.size ?? file?.size ?? size;
+    const bytes = (url ? state?.size : current?.size) ?? file?.size ?? size;
     const kind = mime ? previewKind(mime) : null;
     const original = url ? state?.status === 'ready' ? url : undefined : !failure ? current?.url : undefined;
     const loading = url ? state?.status === 'pending' : !!(file || attachment) && !failure && !current;
     return <FileItem {...props} identity={url ?? identity} href={url} error={error || failure}
       busy={busy ?? loading} status={status || (url && loading ? '检查中' : undefined)}
-      metadata={bytes !== undefined ? formatBytes(bytes) : mime}
+      size={bytes} metadata={bytes === undefined ? mime : undefined}
       preview={original && kind ? { url: original, key: url ? `${url}:${state?.round}` : original, kind } : undefined}
       downloadUrl={download && original ? url ? `${url}?download=1` : original : undefined}
       retry={retry ?? (url && state?.status === 'unavailable' && <Button type="button" variant="outline"

@@ -769,6 +769,13 @@ function descendants(value: unknown): Element[] {
   return [element, ...descendants(element.props.children)];
 }
 
+function textContent(value: unknown): string {
+  if (typeof value === 'string' || typeof value === 'number') return String(value);
+  if (Array.isArray(value)) return value.map(textContent).join('');
+  if (!value || typeof value !== 'object' || !('props' in value)) return '';
+  return textContent((value as Element).props.children);
+}
+
 function click(element: Element, modifiers: Record<string, unknown> = {}) {
   let prevented = false;
   (element.props.onClick as (event: unknown) => void)({
@@ -779,6 +786,120 @@ function click(element: Element, modifiers: Record<string, unknown> = {}) {
 
 function openFile(tree: Element) {
   click(descendants(tree).find(element => element.props['aria-haspopup'] === 'dialog')!);
+}
+
+for (const [presentation, start] of [['classic', activate], ['next', activateNext]] as const) {
+  test(`${presentation} file names show HEAD sizes once in draft, message and inline surfaces`, async t => {
+    for (const surface of ['draft', 'message', 'link', 'image'] as const) {
+      for (const [length, suffix] of [
+        [undefined, ''], ['invalid', ''], ['0', ' (0 B)'], ['2048', ' (2.0 KiB)'], ['1258291', ' (1.2 MiB)'],
+      ] as const) {
+        await t.test(`${surface}: ${length ?? 'unknown'}`, async () => {
+          const h = harness();
+          h.context.request = async (path, init) => {
+            h.calls.push({ path, init });
+            return new Response(null, { headers: {
+              'content-type': 'application/pdf', ...(length === undefined ? {} : { 'content-length': length }),
+            } });
+          };
+          const frontend = await start(h.context);
+          const name = 'report.pdf';
+          const origin = { sessionId: 'size-fixture', messageId: surface };
+          const attachment = { type: 'file' as const, path: `/data/files/${fileId}/ready/body.pdf`, displayName: name };
+          const draft = new Draft();
+          draft.appendAttachments([{ id: 'restored', value: attachment }]);
+          const render = () => surface === 'draft'
+            ? h.render(composerComponent(frontend), { draft, operation: 'prompt', disabled: false })
+            : surface === 'message'
+              ? h.render(nativeComponent(frontend), { node: { kind: 'attachment', origin, label: name, attachment } })
+              : h.render(frontend.markdown![0]!.component, {
+                node: { kind: surface, origin, target: './report.pdf', label: name }, fallback: 'fallback',
+              });
+          let tree = render();
+          assert.doesNotMatch(textContent(tree), /\(\d.*\)/, 'pending HEAD never fabricates a size');
+          h.flushEffects(); await settle();
+          tree = render();
+          const trigger = descendants(tree).find(element => element.props['aria-haspopup'] === 'dialog')!;
+          assert.ok(textContent(trigger).includes(name + suffix));
+          if (suffix) {
+            assert.equal(textContent(tree).split(suffix.slice(2, -1)).length - 1, 1, 'no duplicate size in the row metadata');
+            assert.ok(String(trigger.props['aria-description']).includes(suffix.trim()));
+          } else {
+            assert.doesNotMatch(textContent(tree), /\(\d.*\)/);
+            assert.match(String(trigger.props['aria-description']), /application\/pdf/);
+          }
+          openFile(tree);
+          tree = render();
+          const title = descendants(tree).find(element => element.type === 'h2')!;
+          assert.equal(textContent(title), name + suffix);
+          if (suffix) assert.equal(textContent(tree).split(suffix.slice(2, -1)).length - 1, 2, 'one size in each name, none in details');
+          for (const download of descendants(tree).filter(element => element.props.download !== undefined)) {
+            assert.equal(download.props.download, name, 'display-only size never changes the download filename');
+          }
+          assert.equal(h.calls.length, 1);
+          assert.equal(h.calls[0]!.init?.method, 'HEAD', 'size labels do not download the file body');
+          h.unmount(); frontend.dispose?.();
+        });
+      }
+    }
+  });
+
+  test(`${presentation} blob names use decoded sizes and never invent bytes for unavailable data`, async () => {
+    for (const surface of ['draft', 'message']) {
+      for (const [data, suffix] of [['', ' (0 B)'], ['aGVsbG8=', ' (5 B)'], [undefined, ''], ['!', '']] as const) {
+        if (surface === 'draft' && data === undefined) continue;
+        const h = harness();
+        const frontend = await start(h.context);
+        const name = 'local.txt';
+        const attachment = { type: 'blob' as const, mimeType: 'text/plain', data, displayName: name };
+        const draft = new Draft();
+        if (surface === 'draft' && data !== undefined) draft.appendAttachments([{ id: 'blob', value: { ...attachment, data } }]);
+        const render = () => surface === 'draft'
+          ? h.render(composerComponent(frontend), { draft, operation: 'prompt', disabled: false })
+          : h.render(nativeComponent(frontend), { node: {
+            kind: 'attachment', origin: { sessionId: 'size-fixture', messageId: 'blob' }, label: name, attachment,
+          } });
+        render(); h.flushEffects();
+        const tree = render();
+        const trigger = descendants(tree).find(element => element.props['aria-haspopup'] === 'dialog')!;
+        assert.ok(textContent(trigger).includes(name + suffix));
+        if (suffix) assert.equal(textContent(tree).split(suffix).length - 1, 1);
+        else assert.doesNotMatch(textContent(tree), /\(\d.*\)/);
+        assert.equal(h.calls.length, 0);
+        h.unmount(); frontend.dispose?.();
+      }
+    }
+  });
+
+  test(`${presentation} uploads keep size beside the name while pending or failed`, async () => {
+    for (const type of ['application/pdf', 'image/png']) {
+      for (const size of [0, 2048]) {
+        const h = harness();
+        let respond!: (response: Response) => void;
+        h.context.request = () => new Promise(resolve => { respond = resolve; });
+        const frontend = await start(h.context);
+        const draft = new Draft();
+        const composer = { draft, operation: 'prompt' as const, disabled: false };
+        const name = `long-${'name'.repeat(80)}.${type === 'image/png' ? 'png' : 'pdf'}`;
+        const suffix = size === 0 ? ' (0 B)' : ' (2.0 KiB)';
+        selectFiles(frontend, composer, [new File([new Uint8Array(size)], name, { type })]);
+        const render = () => h.render(composerComponent(frontend), composer);
+        let tree = render();
+        assert.ok(textContent(tree).includes(name + suffix), 'File.size is available before preview effects');
+        h.flushEffects();
+        tree = render();
+        assert.equal(textContent(tree).split(suffix).length - 1, 1);
+        assert.ok(descendants(tree).some(element => element.type === 'progress'));
+        respond(Response.json({ error: 'Synthetic upload failure' }, { status: 503 }));
+        await settle();
+        tree = render();
+        assert.ok(textContent(tree).includes(name + suffix));
+        assert.ok(descendants(tree).some(element => element.props['aria-label'] === `重新上传 ${name}`));
+        assert.match(JSON.stringify(tree), /Synthetic upload failure/);
+        h.unmount(); frontend.dispose?.();
+      }
+    }
+  });
 }
 
 test('native blob cards decode locally, reuse their URL on rerender and revoke it on change or teardown', async () => {
@@ -1334,6 +1455,8 @@ test('compact row and inline styles stay scoped and preserve independent layout 
   assert.match(css, /\.cf-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) var\(--cf-actions-width\);[^}]*max-width:\s*100%;[^}]*height:\s*var\(--ck-control-size\);/s);
   assert.match(css, /\.cf-name-stem\s*\{[^}]*min-width:\s*0;[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;/s);
   assert.match(css, /\.cf-name-extension\s*\{[^}]*max-width:\s*45%;/s);
+  assert.match(css, /\.cf-name-text\s*\{[^}]*display:\s*flex;[^}]*min-width:\s*0;/s);
+  assert.match(css, /\.cf-name-size\s*\{[^}]*flex:\s*none;[^}]*white-space:\s*pre;/s);
   assert.match(css, /\.cf-row-actions\s*\{[^}]*grid-template-columns:\s*repeat\(2, var\(--ck-control-size\)\);/s);
   assert.match(css, /\.cf-expanded-media\s*\{[^}]*object-fit:\s*contain;/s);
   assert.match(css, /\.cf-attachment-list\s*\{[^}]*flex-direction:\s*column;/s);
@@ -1341,7 +1464,8 @@ test('compact row and inline styles stay scoped and preserve independent layout 
   assert.match(css, /\.cf-reference-link\s*\{[^}]*padding:\s*0;[^}]*border:\s*0;[^}]*background:\s*transparent;/s);
   assert.doesNotMatch(css, /\b(?:body|html|:root)\b|\.chat-|line-clamp|\.cf-thumbnail|\.cf-card/);
   const selectors = [...css.matchAll(/(?:^|})\s*([^{}]+)\{/g)].flatMap(match => match[1]!.split(','));
-  assert.ok(selectors.every(selector => selector.trim().startsWith('.cf-')), 'no global host CSS overrides');
+  assert.ok(selectors.every(selector => selector.trim().startsWith('.cf-') ||
+    selector.trim() === '@container cf-row (max-width: 26rem)'), 'no global host CSS overrides');
 });
 
 test('full names and errors are accessible on touch while all tile information and actions use fixed slots', async () => {
@@ -1369,7 +1493,7 @@ test('full names and errors are accessible on touch while all tile information a
     tree = render();
     const dialog = descendants(tree).find(element => element.type === 'dialog')!;
     assert.equal(dialog.props['aria-label'], `文件详情 ${name}`);
-    assert.deepEqual(descendants(dialog).find(element => element.props.className === 'ck-heading cf-dialog-name')!.props.children, [name]);
+    assert.equal(textContent(descendants(dialog).find(element => element.props.className === 'ck-heading cf-dialog-name')), `${name} (97.7 KiB)`);
     assert.match(JSON.stringify(dialog), /upload limit/);
     assert.equal(descendants(dialog).some(element => ['img', 'video', 'iframe', 'object'].includes(String(element.type))), false);
     (dialog.props.onClose as () => void)();
@@ -1430,6 +1554,11 @@ test('row progress and reserved actions never add height or use an overlay hit t
   assert.match(css, /\.cf-row-open\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*1\.25rem minmax\(0, 1fr\) var\(--cf-status-width\);[^}]*height:\s*100%;/s);
   assert.doesNotMatch(css, /\.cf-row \.cf-row-open:focus-visible/, 'row buttons retain shared inset focus');
   assert.match(css, /\.cf-progress\s*\{[^}]*position:\s*absolute;[^}]*height:\s*2px;/s);
+  assert.match(css, /container:\s*cf-row \/ inline-size;/);
+  const narrow = css.slice(css.indexOf('@container cf-row'));
+  assert.match(narrow, /\.cf-row-open\s*\{[^}]*grid-template-columns:\s*1\.25rem minmax\(0, 1fr\);[^}]*grid-template-rows:\s*1fr 1fr;/s);
+  assert.match(narrow, /\.cf-name-stem\s*\{[^}]*min-width:\s*1ch;/s);
+  assert.match(narrow, /\.cf-row-status\s*\{[^}]*grid-column:\s*2;/s);
   assert.doesNotMatch(css, /pointer-events|cf-card-open|cf-preview-button/);
 });
 
