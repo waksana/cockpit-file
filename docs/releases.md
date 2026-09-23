@@ -47,6 +47,8 @@ SDK pin 不是 moving main；本体 PR 尚未合并时，模块 CI 仍使用明�
 版本 tag 不允许更新或删除。已发布资产不自动覆盖；源代码修复应使用新版本。
 本次配置不自动创建首个 tag 或 Release，也不合并 Cockpit 本体的 PR。
 
+After a joint deployment with the host, tag and release the accepted commit per Cockpit's [release after a joint deployment](https://github.com/waksana/cockpit/blob/main/docs/releasing.md#release-after-acceptance) policy.
+
 ## 本地构建与来源
 
 普通 dirty-tree build 可以开发，但不能作为发行包来源。
