@@ -70,3 +70,27 @@ test('packaging rejects dirty source, stale builds, SDK changes and tampered dis
   await writeFile(join(f.root, '.cockpit-sdk/protocol/package.json'), '{"version":"changed"}');
   await assert.rejects(packageModule(f.root, f.output), /SDK differs/);
 });
+
+test('default instructions must be a packaged dist file within 16 KiB', async t => {
+  const f = await fixture(t);
+  const file = join(f.root, 'cockpit.module.json');
+  const manifest = JSON.parse(await readFile(file, 'utf8'));
+  manifest.instructions = 'dist/instructions.md';
+  await writeFile(file, JSON.stringify(manifest));
+  commitFixture(f.root);
+  await f.receipt();
+  await assert.rejects(packageModule(f.root, f.output), { code: 'ENOENT' });
+  await writeFile(join(f.root, 'dist/instructions.md'), 'x'.repeat(16 * 1024 + 1));
+  await f.receipt();
+  await assert.rejects(packageModule(f.root, f.output), /exceed 16 KiB/);
+  await writeFile(join(f.root, 'dist/instructions.md'), 'Link files as Markdown.\n');
+  await f.receipt();
+  const archive = await packageModule(f.root, f.output);
+  assert.match(execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' }), /dist\/instructions\.md/);
+  await verifyPackage(f.root, archive);
+  for (const instructions of ['instructions.md', 'dist/../instructions.md']) {
+    manifest.instructions = instructions;
+    await writeFile(file, JSON.stringify(manifest));
+    await assert.rejects(packageModule(f.root, join(f.root, 'other-output')), /safe dist path/);
+  }
+});

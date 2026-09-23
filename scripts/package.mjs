@@ -4,7 +4,7 @@ import { lstat, mkdir, readdir, readFile, writeFile, rm, rmdir } from 'node:fs/p
 import { spawnSync } from 'node:child_process';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkedBuild } from './build-identity.mjs';
+import { checkedBuild, INSTRUCTIONS_LIMIT } from './build-identity.mjs';
 
 async function regularTree(directory) {
   if (!(await lstat(directory)).isDirectory()) throw new Error(`Not a build directory: ${directory}`);
@@ -24,11 +24,14 @@ export async function packageModule(root, output) {
     || !/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(manifest.version)
     || metadata.version !== manifest.version) throw new Error('Module identity and package version must agree');
   const frontendInputs = [manifest.frontend?.entry, ...(manifest.frontend?.styles ?? [])];
-  const inputs = [manifest.backend, ...frontendInputs];
+  const inputs = [manifest.backend, ...(manifest.instructions === undefined ? [] : [manifest.instructions]), ...frontendInputs];
   for (const file of inputs) {
     if (typeof file !== 'string' || !file.startsWith('dist/') || file.split('/').some(part => !part || part === '.' || part === '..')
       || file.includes('\\')) throw new Error('Module entry must be a safe dist path');
     if (!(await lstat(join(root, file))).isFile()) throw new Error(`Build the module first: missing ${file}`);
+  }
+  if (manifest.instructions !== undefined && (await lstat(join(root, manifest.instructions))).size > INSTRUCTIONS_LIMIT) {
+    throw new Error('Module default instructions exceed 16 KiB');
   }
   for (const file of frontendInputs) {
     if (!manifest.frontend.assets.some(asset => file === asset || file.startsWith(`${asset}/`))) {

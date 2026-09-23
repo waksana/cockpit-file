@@ -64,6 +64,10 @@ Agent 可以正常回复：
 ![效果图](./abc.png)
 ```
 
+The module's default instructions ([`src/instructions.md`](../src/instructions.md), packaged as
+`dist/instructions.md`) tell agents to use this form in the reply body; paths only in code, plain text
+or tool output are not captured.
+
 模块后端收到 delta 时即可对当前消息已识别的本地引用进行 best-effort 捕获，
 不等待整条回复完成；同一条新实时消息的完整事件可补全遗漏的引用。
 历史读取和恢复时重放的旧消息不走捕获路径。

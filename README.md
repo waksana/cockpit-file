@@ -14,15 +14,18 @@ Cockpit File 是 [Cockpit](https://github.com/waksana/cockpit) 的文件模块�
 全局文件库和汉堡菜单中的管理页面列入 [Roadmap](docs/roadmap.md)，不在首版实现。
 
 Agent 可以照常使用 Markdown 引用文件，不需要学习额外的发送文件命令。
+Default instructions: while the module is enabled, the host appends [`src/instructions.md`](src/instructions.md)
+to each Cockpit session, telling agents to give files as Markdown links/images in the reply body
+(see [file references](docs/file-references.md#3-助手回复普通-markdown不要求发布工具)).
 本模块不替代 Copilot 的会话与历史管理，也不是服务器项目文件编辑器。
 只维护模块启用后新上传和新回复中捕获的文件，不扫描或补存旧聊天文件。
 
 ## 当前状态
 
-**当前为未发行源码，最低配套宿主为 Cockpit 0.3.0（Web API v2、公共 UI v1）。**
+**当前为未发行源码，最低配套宿主为 Cockpit 未发行 main 提交 `1323991`（包版本 0.4.4，Web API v2、公共 UI v1）；宿主 0.3.0 会拒绝含 `instructions` 的 manifest。**
 manifest/package 仍标记 0.2.1，但当前源码在 0.2.1 之后有未发行变更，包内容不同；打包或安装前须按 [CONTRIBUTING](CONTRIBUTING.md#immutable-installation-versions) 准备新的补丁版本，不得以 0.2.1 身份打包安装。
-SDK 固定为可取得的基础提交 `0fa433d99c053df2caf80770f0f8762b9ed7002e`；
-该提交提供公共协议与组件基础，不表示最终宿主应用或 Release 已交付。
+SDK 固定为可取得的宿主提交 `13239911066ab8729a4453d5d2657f11611ce06f`；
+该提交提供公共协议与组件基础，不表示宿主 Release 已交付。
 有任意草稿的未完成上传、失败选择或未加入草稿的上传结果时，浏览器离开确认保护刷新与关页；
 浏览器可能限制确认框，确认离开不保证恢复这些内存任务。
 仅有已持久化就绪附件时不提示。详见[离开页面保护](docs/frontend-contract.md#离开页面保护)。

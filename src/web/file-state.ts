@@ -1,12 +1,12 @@
-import type { ModuleFrontendServices } from '@cockpit/module-api';
+import type { ModuleFrontendContext } from '@cockpit/module-api';
 import type { FileComposerContext, FileAttachment, FileDraft } from './file-draft.ts';
 import { MAX_ATTACHMENTS } from './file-draft.ts';
 import { fileRequestPath, managedFileUrl, nativeFileUrl } from '../shared/files.ts';
 
 export const DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
 
-type Request = ModuleFrontendServices['request'];
-type Report = ModuleFrontendServices['report'];
+type Request = ModuleFrontendContext['request'];
+type Report = ModuleFrontendContext['report'];
 type UploadStatus = 'uploading' | 'failed' | 'ready';
 
 export interface UploadItem {

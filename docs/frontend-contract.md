@@ -3,12 +3,11 @@
 ## 入口与共享服务
 
 manifest 声明 `frontend.entry/styles`（`src/web/index.tsx` 与 `src/web/styles.css`）。
-当前为未发行源码（manifest 仍标记 0.2.1，打包前须准备新补丁版本），最低配套宿主为 **Cockpit 0.3.0**。
-SDK 固定为 `0fa433d99c053df2caf80770f0f8762b9ed7002e`，该基础提交不表示最终宿主应用
-或 Release 已完成。
+当前为未发行源码（manifest 仍标记 0.2.1，打包前须准备新补丁版本），最低配套宿主为未发行 main 提交 **`1323991`**。
+SDK 固定为 `13239911066ab8729a4453d5d2657f11611ce06f`（包版本 0.4.4），不表示宿主 Release 已完成。
 
 `file-services.ts` 集中注册 FileDrafts、UploadStore、FileProbes、FileInputs 及其释放回调；
-其 context 类型为 `ModuleFrontendServices`，入口保留自己的兼容检查。
+其 context 类型为 `ModuleFrontendContext`，入口保留自己的兼容检查。
 `attachments` schema 身份、版本 1 持久化编码与 ACK 规则不变，
 没有新草稿副本、存储迁移或二进制持久化。
 
@@ -33,7 +32,7 @@ SDK 固定为 `0fa433d99c053df2caf80770f0f8762b9ed7002e`，该基础提交不表
 ## 呈现基线
 
 **前端入口继续使用 Web API v2、公共 UI v1 与独立 shared-surfaces v1；包/后端 API v1 不变。**
-精确配套宿主为 `0fa433d99c053df2caf80770f0f8762b9ed7002e`（SDK 源码版本 0.3.0），
+精确配套宿主为 `13239911066ab8729a4453d5d2657f11611ce06f`（SDK 源码版本 0.4.4），
 不是已发布或部署的声明。激活在注册贡献前检查
 `context.uiSurfaceVersion === 1`；缺少或不支持时明确拒绝。
 预览原生 dialog 使用 `ck-surface ck-modal`，标题与动作使用 `ck-heading` / `ck-actions`。
