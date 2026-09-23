@@ -1,22 +1,20 @@
 # 下载、构建与安装
 
-## 新版集成状态
+## 集成状态
 
-本分支准备版本为 **0.2.1**，最低配套宿主为具有独立新呈现支持的 **Cockpit 0.3.0**。
-新入口要求 `ModuleNextFrontendContext` / `ModuleFrontendServices` / 公共 React UI v1
-与双入口 manifest。旧宿主可能拒绝 `frontend.next`，不能因为保留经典入口就声称旧宿主兼容。
+当前为未发行源码，最低配套宿主为 **Cockpit 0.3.0**。
+manifest/package 仍标记 0.2.1，但当前源码已在 0.2.1 之后移除 `/next`，包内容不同；打包或安装前须按 [CONTRIBUTING](../CONTRIBUTING.md#immutable-installation-versions) 准备新的补丁版本，不得以 0.2.1 身份打包安装。
+manifest 只声明经典入口，已移除 `/next` 新版呈现与 `frontend.next`；
+仍接受可选 `frontend.next` 的宿主与已移除 next 的宿主都只加载经典入口。
 SDK 精确固定为已提交且可独立取得的
 `0fa433d99c053df2caf80770f0f8762b9ed7002e`，module-api/protocol 版本均为 **0.3.0**。
 这是公共协议与组件基础提交，最终宿主应用仍由配套集成交付；不表示已发布或部署。
 
-构建分别输出 `dist/web/index.js` / `styles.css` 和
-`dist/web/next/index.js` / `styles.css`；都位于已有公开 asset 根。
-模块只打包自身逻辑和布局样式，公共 React/shadcn 组件和主题由宿主提供。
-两套呈现使用相同既有草稿编码；切换不执行存储迁移。
+构建输出 `dist/web/index.js` / `styles.css`，位于已有公开 asset 根。
+模块只打包自身逻辑和布局样式，公共组件和主题由宿主提供；既有草稿编码不变。
 
 经典入口继续要求 Web API v2、公共 UI v1、
-`context.uiSurfaceVersion === 1` 与 `context.createPortal`，激活前缺少任一能力均拒绝；
-新版检查 Web API v2、独立 `context.ui.version === 1` 与 draft schema 能力。
+`context.uiSurfaceVersion === 1` 与 `context.createPortal`，激活前缺少任一能力均拒绝。
 模块包和后端 API 仍为 v1，后端行为没有随本次 Web 迁移改变。
 前端 context/返回声明必须是 API v2；不能仅凭宿主版本号或后端 API v1 推断支持。
 公共规则见宿主[模块 UI 指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md)。
@@ -70,12 +68,8 @@ pnpm build &&
 pnpm package
 ```
 
-当前准备源码的默认输出（不表示已发布）：
-
-```text
-module-output/cockpit-file-0.2.1.tgz
-module-output/cockpit-file-0.2.1.tgz.sha256
-```
+默认输出为 `module-output/cockpit-file-<version>.tgz` 及其 `.sha256`（不表示已发布）。
+当前源码须先准备新补丁版本再打包安装，见上文集成状态。
 
 输出目录必须不存在，也可以 `pnpm package /absolute/new/output` 指定新目录。
 打包要求干净的已提交源码；修改后先提交再重新 build，不能复用旧构建凭据。
@@ -93,7 +87,7 @@ React 与 portal 渲染器由宿主注入，
 ```sh
 node --import ./apps/server/node_modules/tsx/dist/loader.mjs \
   apps/server/src/module-cli.ts install \
-  /absolute/path/cockpit-file-0.2.1.tgz --trust-local-code --enable
+  /absolute/path/cockpit-file-<version>.tgz --trust-local-code --enable
 ```
 
 该确认表示信任本地代码，不是密码、签名验证或安全沙箱。

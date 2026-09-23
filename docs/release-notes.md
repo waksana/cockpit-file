@@ -1,3 +1,15 @@
+# Unreleased (source only)
+
+Remove the `/next` new presentation. The manifest no longer declares
+`frontend.next`, and `src/web/next`, its build/packaging steps and next-only
+tests are gone. Only the classic entry (`dist/web/index.js` / `styles.css`)
+ships; hosts that still accept an optional `frontend.next` and hosts that have
+removed it both activate that entry. Shared attachment schema, upload, picker,
+resource probing, backend, storage format and file references are unchanged;
+no migration is required. Package contents now differ from 0.2.1, so a fresh
+patch version must be prepared before packaging or installing; this source
+change implies no version, tag, Release or deployment.
+
 # Cockpit File 0.2.1 (source preparation)
 
 Prepare a fresh immutable patch package for the file-size labels merged in

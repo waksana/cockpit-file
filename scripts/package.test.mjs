@@ -37,28 +37,23 @@ test('module packaging rejects linked files, tests and version drift', async t =
   await assert.rejects(packageModule(f.root, f.output), /version must agree/);
 });
 
-test('both frontend presentations must exist inside shared asset roots and ship in one archive', async t => {
+test('frontend entry and styles must exist inside declared asset roots and ship in the archive', async t => {
   const f = await fixture(t);
   const file = join(f.root, 'cockpit.module.json');
   const manifest = JSON.parse(await readFile(file, 'utf8'));
-  manifest.frontend.next = { entry: 'dist/next.js', styles: ['dist/next.css'] };
+  manifest.frontend.styles = ['dist/missing.css'];
   await writeFile(file, JSON.stringify(manifest));
   await assert.rejects(packageModule(f.root, f.output), { code: 'ENOENT' });
-  await writeFile(join(f.root, 'dist/next.js'), 'Synthetic new entry');
-  await assert.rejects(packageModule(f.root, f.output), { code: 'ENOENT' });
-  await writeFile(join(f.root, 'dist/next.css'), 'Synthetic new style');
-  manifest.frontend.assets = ['dist/web.js', 'dist/web.css'];
+  manifest.frontend.styles = ['dist/web.css'];
+  manifest.frontend.assets = ['dist/web.js'];
   await writeFile(file, JSON.stringify(manifest));
   await assert.rejects(packageModule(f.root, f.output), /declared asset roots/);
   manifest.frontend.assets = ['dist'];
   await writeFile(file, JSON.stringify(manifest));
-  commitFixture(f.root);
-  await f.receipt();
   const archive = await packageModule(f.root, f.output);
   const entries = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' });
-  assert.match(entries, /dist\/next\.js/);
-  assert.match(entries, /dist\/next\.css/);
   assert.match(entries, /dist\/web\.js/);
+  assert.match(entries, /dist\/web\.css/);
   await verifyPackage(f.root, archive);
 });
 

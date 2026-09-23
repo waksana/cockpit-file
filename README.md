@@ -8,7 +8,7 @@ Cockpit File 是 [Cockpit](https://github.com/waksana/cockpit) 的文件模块�
 ## 首版范围
 
 - **聊天附件**：选择、拖入或粘贴文件，准备好后随文字一起发送。
-- **文件展示**：经典界面保留紧凑附件行；独立新版使用可换行的附件清单与共享文件详情。Markdown 引用仍随正文折行，点击查看媒体或下载原件。
+- **文件展示**：紧凑附件行与文件详情。Markdown 引用仍随正文折行，点击查看媒体或下载原件。
 - **消息中的文件版本**：同一路径的文件修改后再次交付，旧消息仍保留原来保存的版本。
 
 全局文件库和汉堡菜单中的管理页面列入 [Roadmap](docs/roadmap.md)，不在首版实现。
@@ -19,17 +19,17 @@ Agent 可以照常使用 Markdown 引用文件，不需要学习额外的发送�
 
 ## 当前状态
 
-**当前准备版本为 0.2.1，最低配套宿主为支持独立新版呈现的 Cockpit 0.3.0。**
+**当前为未发行源码，最低配套宿主为 Cockpit 0.3.0（Web API v2、公共 UI v1）。**
+manifest/package 仍标记 0.2.1，但当前源码已在 0.2.1 之后移除 `/next`，包内容不同；打包或安装前须按 [CONTRIBUTING](CONTRIBUTING.md#immutable-installation-versions) 准备新的补丁版本，不得以 0.2.1 身份打包安装。
 SDK 固定为可取得的基础提交 `0fa433d99c053df2caf80770f0f8762b9ed7002e`；
 该提交提供公共协议与组件基础，不表示最终宿主应用或 Release 已交付。
-旧宿主可能拒绝 `frontend.next`，即使仅使用经典入口也须配套升级。
-新版以独立 `frontend.next` 入口消费宿主注入的公共 React 组件与主题，经典入口和样式不加载新版代码。
-两套界面共享附件 schema、上传、选择器与资源探测，不复制后端或保存另一份草稿。
-有任意草稿的未完成上传、失败选择或未加入草稿的上传结果时，浏览器离开确认保护刷新、
-关页和新旧界面切换；浏览器可能限制确认框，确认离开不保证恢复这些内存任务。
-仅有已持久化就绪附件时不提示。详见[新 UI 接入](docs/frontend-contract.md#independent-next-ui)。
+模块只声明经典入口（`frontend.entry/styles`），不再提供 `/next` 新版呈现或 `frontend.next`；
+仍接受可选 `frontend.next` 的宿主与已移除 next 的宿主都只加载该经典入口。
+有任意草稿的未完成上传、失败选择或未加入草稿的上传结果时，浏览器离开确认保护刷新与关页；
+浏览器可能限制确认框，确认离开不保证恢复这些内存任务。
+仅有已持久化就绪附件时不提示。详见[离开页面保护](docs/frontend-contract.md#离开页面保护)。
 
-两套呈现保留相同的既有持久化草稿编码，无存储迁移或自动重放。
+既有持久化草稿编码不变，无存储迁移或自动重放。
 精确支持 SHA 与公共能力见[安装指南](docs/installation.md)，不能仅凭 UI v1 或版本号推断。
 尚未声明发布；历史安装包仍以原 tag 的 Release 资产为准。
 Web 层采用注册 state 服务、
@@ -37,8 +37,7 @@ Web 层采用注册 state 服务、
 附件属于文件模块注册的草稿 schema，完整草稿文件列表也由模块提供。
 基础草稿没有附件字段；扩展不可用时不参与发送，也不由本体补文件兜底 UI。
 原生问答使用独立草稿，普通 prompt 草稿及其文件保留，问题结束后恢复。
-两套入口都要求 Web API v2；经典另需公共 UI v1、`uiSurfaceVersion: 1` 与
-`context.createPortal`，新版使用独立 `context.ui.version === 1` 的 React 组件；
+前端入口要求 Web API v2、公共 UI v1、`uiSurfaceVersion: 1` 与 `context.createPortal`；
 旧 Web 插口不保留兼容层，不能只看宿主包版本号或后端 API v1 推断兼容。
 准确构建基线见 [`tooling/host-sdk.json`](tooling/host-sdk.json) 和[安装指南](docs/installation.md)。
 公共样式、图标和兼容规则以宿主
