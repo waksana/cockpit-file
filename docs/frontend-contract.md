@@ -32,7 +32,7 @@ SDK 固定为 `0fa433d99c053df2caf80770f0f8762b9ed7002e`，该基础提交不表
 
 ## 呈现基线
 
-**0.2.0 起前端入口使用 Web API v2、公共 UI v1 与独立 shared-surfaces v1；包/后端 API v1 不变。**
+**前端入口继续使用 Web API v2、公共 UI v1 与独立 shared-surfaces v1；包/后端 API v1 不变。**
 精确配套宿主为 `0fa433d99c053df2caf80770f0f8762b9ed7002e`（SDK 源码版本 0.3.0），
 不是已发布或部署的声明。激活在注册贡献前检查
 `context.uiSurfaceVersion === 1`；缺少或不支持时明确拒绝。
