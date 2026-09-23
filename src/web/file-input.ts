@@ -1,11 +1,11 @@
-import type { ModuleFrontendServices } from '@cockpit/module-api';
+import type { ModuleFrontendContext } from '@cockpit/module-api';
 import type { ClipboardEvent, DragEvent } from 'react';
 import type { FileComposerContext } from './file-draft.ts';
 import type { UploadStore } from './file-state.ts';
 
 interface FileInputOptions {
   readonly uploads: Pick<UploadStore, 'receive'>;
-  readonly report: ModuleFrontendServices['report'];
+  readonly report: ModuleFrontendContext['report'];
   readonly signal: AbortSignal;
   readonly page?: Pick<Document, 'createElement'>;
   readonly enabled: boolean;

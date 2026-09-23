@@ -24,6 +24,7 @@ await removeTests(resolve(root, 'dist'));
 await writeFile(resolve(root, 'dist/package.json'), '{"type":"module"}\n');
 await mkdir(resolve(root, 'dist/web'), { recursive: true });
 await copyFile(resolve(root, 'src/web/styles.css'), resolve(root, 'dist/web/styles.css'));
+await copyFile(resolve(root, 'src/instructions.md'), resolve(root, 'dist/instructions.md'));
 await mkdir(resolve(root, 'dist/licenses'), { recursive: true });
 await copyFile(resolve(root, 'node_modules/lucide-static/LICENSE'), resolve(root, 'dist/licenses/lucide.txt'));
 await writeBuildReceipt(root, before);

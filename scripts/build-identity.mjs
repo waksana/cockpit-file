@@ -44,6 +44,8 @@ export async function inventory(root, roots) {
   return files.sort((a, b) => a.path.localeCompare(b.path, 'en'));
 }
 
+export const INSTRUCTIONS_LIMIT = 16 * 1024;
+
 export const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 export async function sdkIdentity(root) {

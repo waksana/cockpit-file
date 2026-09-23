@@ -2,11 +2,12 @@
 
 ## 集成状态
 
-当前为未发行源码，最低配套宿主为 **Cockpit 0.3.0**。
+当前为未发行源码，最低配套宿主为 Cockpit 未发行 main 提交 **`1323991`**（包版本 0.4.4）。
+The manifest declares default `instructions`; hosts that predate this field (including 0.3.0) reject the module.
 manifest/package 仍标记 0.2.1，但当前源码在 0.2.1 之后有未发行变更，包内容不同；打包或安装前须按 [CONTRIBUTING](../CONTRIBUTING.md#immutable-installation-versions) 准备新的补丁版本，不得以 0.2.1 身份打包安装。
 SDK 精确固定为已提交且可独立取得的
-`0fa433d99c053df2caf80770f0f8762b9ed7002e`，module-api/protocol 版本均为 **0.3.0**。
-这是公共协议与组件基础提交，最终宿主应用仍由配套集成交付；不表示已发布或部署。
+`13239911066ab8729a4453d5d2657f11611ce06f`，module-api/protocol 版本均为 **0.4.4**。
+该宿主提交尚未发行；宿主与模块须配套交付，不表示已发布或部署。
 
 构建输出 `dist/web/index.js` / `styles.css`，位于已有公开 asset 根。
 模块只打包自身逻辑和布局样式，公共组件和主题由宿主提供；既有草稿编码不变。

@@ -1,6 +1,7 @@
 # Cockpit File 文档
 
-**当前为未发行源码，最低配套宿主 Cockpit 0.3.0。**
+**当前为未发行源码，最低配套宿主为 Cockpit 未发行 main 提交 `1323991`（包版本 0.4.4）。**
+The module ships [default instructions](../src/instructions.md) asking agents to give files as Markdown links/images.
 manifest/package 仍标记 0.2.1，但当前源码在 0.2.1 之后有未发行变更，包内容不同；打包或安装前须按 [CONTRIBUTING](../CONTRIBUTING.md#immutable-installation-versions) 准备新的补丁版本，不得以 0.2.1 身份打包安装。
 组件与浏览器离开保护见[前端接入契约](frontend-contract.md)。既有持久化草稿编码不变。
 

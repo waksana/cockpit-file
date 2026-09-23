@@ -1,10 +1,10 @@
-import type { ModuleFrontendServices } from '@cockpit/module-api';
+import type { ModuleFrontendContext } from '@cockpit/module-api';
 import { registerFileDrafts } from './file-draft.ts';
 import { FileInputs } from './file-input.ts';
 import { DEFAULT_MAX_BYTES, FileProbes, UploadStore } from './file-state.ts';
 import { protectUnpersistedFiles } from './unload.ts';
 
-export function createFileServices(context: ModuleFrontendServices) {
+export function createFileServices(context: ModuleFrontendContext) {
   const nativePathPrefix = typeof context.config.nativePathPrefix === 'string' ? context.config.nativePathPrefix : '';
   const maxBytes = typeof context.config.maxBytes === 'number' && Number.isSafeInteger(context.config.maxBytes) && context.config.maxBytes > 0
     ? context.config.maxBytes : DEFAULT_MAX_BYTES;

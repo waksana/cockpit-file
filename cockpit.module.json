@@ -4,6 +4,7 @@
   "name": "Files",
   "version": "0.2.1",
   "backend": "dist/server/index.js",
+  "instructions": "dist/instructions.md",
   "frontend": {
     "entry": "dist/web/index.js",
     "styles": ["dist/web/styles.css"],

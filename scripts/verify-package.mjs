@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import { basename, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { git, loadSdkPin, sameJson } from './build-identity.mjs';
+import { git, INSTRUCTIONS_LIMIT, loadSdkPin, sameJson } from './build-identity.mjs';
 
 export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-parse', 'HEAD'])) {
   assert.match(sourceSha, /^[a-f0-9]{40}$/);
@@ -44,6 +44,11 @@ export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-p
     const bytes = read(file.path);
     assert.equal(bytes.length, file.bytes);
     assert.equal(createHash('sha256').update(bytes).digest('hex'), file.sha256);
+  }
+  if (manifest.instructions !== undefined) {
+    const instructions = build.files.find(file => file.path === manifest.instructions);
+    assert.ok(instructions, 'Module default instructions must be a packaged file');
+    assert.ok(instructions.bytes <= INSTRUCTIONS_LIMIT, 'Module default instructions exceed 16 KiB');
   }
   for (const name of names) if (!name.endsWith('/')) assert.ok(expected.delete(name), `Unexpected package file: ${name}`);
   assert.equal(expected.size, 0, 'An inventoried file is missing');
