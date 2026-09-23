@@ -22,8 +22,8 @@ to each Cockpit session, telling agents to give files as Markdown links/images i
 
 ## 当前状态
 
-**当前为未发行源码，最低配套宿主为 Cockpit 未发行 main 提交 `1323991`（包版本 0.4.4，Web API v2、公共 UI v1）；宿主 0.3.0 会拒绝含 `instructions` 的 manifest。**
-manifest/package 仍标记 0.2.1，但当前源码在 0.2.1 之后有未发行变更，包内容不同；打包或安装前须按 [CONTRIBUTING](CONTRIBUTING.md#immutable-installation-versions) 准备新的补丁版本，不得以 0.2.1 身份打包安装。
+**当前为版本准备源码 0.2.2，最低配套宿主为 Cockpit 未发行 main 提交 `1323991`（包版本 0.4.4，Web API v2、公共 UI v1）；宿主 0.3.0 会拒绝含 `instructions` 的 manifest。**
+manifest/package 标记 0.2.2；相对 0.2.1 的包内容已改变，须使用新的不可变版本身份，不能以 0.2.1 身份打包安装。
 SDK 固定为可取得的宿主提交 `13239911066ab8729a4453d5d2657f11611ce06f`；
 该提交提供公共协议与组件基础，不表示宿主 Release 已交付。
 有任意草稿的未完成上传、失败选择或未加入草稿的上传结果时，浏览器离开确认保护刷新与关页；
