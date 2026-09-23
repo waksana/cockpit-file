@@ -5,7 +5,7 @@
 manifest 只声明 `frontend.entry/styles`（`src/web/index.tsx` 与 `src/web/styles.css`），
 不再包含 `/next` 新版呈现、`frontend.next` 或 `src/web/next`。仍接受可选 `frontend.next`
 的宿主和已移除 next 的宿主都只加载该经典入口；以下外观说明均属于经典界面。
-本分支准备版本为 **0.2.1**，最低配套宿主为 **Cockpit 0.3.0**。
+当前为未发行源码（manifest 仍标记 0.2.1，打包前须准备新补丁版本），最低配套宿主为 **Cockpit 0.3.0**。
 SDK 固定为 `0fa433d99c053df2caf80770f0f8762b9ed7002e`，该基础提交不表示最终宿主应用
 或 Release 已完成。
 

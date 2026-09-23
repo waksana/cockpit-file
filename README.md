@@ -19,7 +19,8 @@ Agent 可以照常使用 Markdown 引用文件，不需要学习额外的发送�
 
 ## 当前状态
 
-**当前准备版本为 0.2.1，最低配套宿主为 Cockpit 0.3.0（Web API v2、公共 UI v1）。**
+**当前为未发行源码，最低配套宿主为 Cockpit 0.3.0（Web API v2、公共 UI v1）。**
+manifest/package 仍标记 0.2.1，但当前源码已在 0.2.1 之后移除 `/next`，包内容不同；打包或安装前须按 [CONTRIBUTING](CONTRIBUTING.md#immutable-installation-versions) 准备新的补丁版本，不得以 0.2.1 身份打包安装。
 SDK 固定为可取得的基础提交 `0fa433d99c053df2caf80770f0f8762b9ed7002e`；
 该提交提供公共协议与组件基础，不表示最终宿主应用或 Release 已交付。
 模块只声明经典入口（`frontend.entry/styles`），不再提供 `/next` 新版呈现或 `frontend.next`；

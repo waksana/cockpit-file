@@ -1,6 +1,7 @@
 # Cockpit File 文档
 
-**当前准备源码：cockpit-file 0.2.1，最低配套宿主 Cockpit 0.3.0。**
+**当前为未发行源码，最低配套宿主 Cockpit 0.3.0。**
+manifest/package 仍标记 0.2.1，但当前源码已在 0.2.1 之后移除 `/next`，包内容不同；打包或安装前须按 [CONTRIBUTING](../CONTRIBUTING.md#immutable-installation-versions) 准备新的补丁版本，不得以 0.2.1 身份打包安装。
 模块只提供经典入口，已移除 `/next` 新版呈现与 `frontend.next` 声明；
 组件与浏览器离开保护见[前端接入契约](frontend-contract.md)。既有持久化草稿编码不变。
 
