@@ -1,25 +1,12 @@
-# Unreleased (source only)
-
-Remove the `/next` new presentation. The manifest no longer declares
-`frontend.next`, and `src/web/next`, its build/packaging steps and next-only
-tests are gone. Only the classic entry (`dist/web/index.js` / `styles.css`)
-ships; hosts that still accept an optional `frontend.next` and hosts that have
-removed it both activate that entry. Shared attachment schema, upload, picker,
-resource probing, backend, storage format and file references are unchanged;
-no migration is required. Package contents now differ from 0.2.1, so a fresh
-patch version must be prepared before packaging or installing; this source
-change implies no version, tag, Release or deployment.
-
 # Cockpit File 0.2.1 (source preparation)
 
 Prepare a fresh immutable patch package for the file-size labels merged in
 [PR #31](https://github.com/waksana/cockpit-file/pull/31); do not replace 0.2.0 bytes.
-Both classic and new presentations put known sizes in parentheses after file
-names in draft/message attachments, managed Markdown references and detail
-titles. Empty files show `(0 B)`; unknown sizes stay absent. Existing upload/HEAD
+Known sizes appear in parentheses after file names in draft/message attachments,
+managed Markdown references and detail titles. Empty files show `(0 B)`; unknown sizes stay absent. Existing upload/HEAD
 metadata supplies sizes without extra body downloads or duplicate size rows.
 
-The minimum paired host remains **Cockpit 0.3.0 with new-presentation support**,
+The minimum paired host remains **Cockpit 0.3.0**,
 with the unchanged SDK pin `0fa433d99c053df2caf80770f0f8762b9ed7002e`.
 Backend behavior, module configuration and persisted draft/file data are unchanged;
 no migration is required. This source preparation does not publish a tag or Release.
@@ -29,37 +16,20 @@ changing the running instance; installed/selected is not active deployment.
 # Cockpit File 0.2.0
 
 Source preparation, not a published release or deployment. Minimum paired host:
-**Cockpit 0.3.0 with new-presentation support**. The immutable SDK foundation is
+**Cockpit 0.3.0**. The immutable SDK foundation is
 `0fa433d99c053df2caf80770f0f8762b9ed7002e` (module-api/protocol 0.3.0).
 This reachable foundation provides the contracts and shared components; final
 host application delivery remains a coordinated integration step.
 
-Independent shadcn presentation alongside the unchanged/default classic entry.
-The new manifest entry shares the existing asset roots, while its CSS and
-presentation code remain outside the classic import graph. It uses the host's
-actual Button, Dialog and Alert components, React and theme; no additional
-React/Radix runtime or module-only primitive is introduced.
-
-File names, status and recovery form a wrapping attachment list. Markdown
-references remain inline native links. Dialogs retain the standard host close
-control; retry focus moves to stable content only when its focused action is
-about to disappear. Media is still explicitly opened, time-bounded and download-safe.
-In the attachment tray, retry hands focus to the same file's persistent trigger.
-Its draft-owned keyed row survives upload, repeated failure and ready-card
-replacement without delayed focus effects. Successful focused removal returns
-to that draft's add-file action; rejected/unfocused actions and late results do
-not reclaim focus from another control or owner.
-
-Both presentations share the existing input/upload/draft/probe services and an
-activation-owned native `beforeunload` safeguard. Unfinished work in hidden
-drafts is included; ready persisted attachments alone are not. Cancelling a
+The existing input/upload/draft/probe services are wired together in one shared
+module with an activation-owned native `beforeunload` safeguard. Unfinished work
+in hidden drafts is included; ready persisted attachments alone are not. Cancelling a
 leave confirmation does not mutate resources. Browser restrictions still apply;
 confirming navigation does not transfer uploads or promise resumability.
 
 Manifest and package metadata now use the fresh feature version 0.2.0.
-Both presentations retain the same existing draft schema and persisted encoding;
-there is no data migration or automatic replay. Older hosts may reject
-`frontend.next`, even when users intend to use classic. Pair the host and module.
+The existing draft schema and persisted encoding are unchanged; there is no data
+migration or automatic replay. Pair the host and module.
 Final archival packaging requires a clean committed source and matching build
 receipt; no commit, tag, Release, installation or production action is implied.
 

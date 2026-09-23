@@ -7,7 +7,7 @@
 
 ## 注册与共享运行时
 
-- manifest 与包只含经典 entry/styles，不声明 `frontend.next`，均受现有 asset 根与摘要约束。
+- manifest 的 entry/styles 均受现有 asset 根与摘要约束。
 - 对所有草稿的非持久化 File 工作执行原生 beforeunload 保护；
   隐藏草稿、失败 File、插入失败结果仍提示，只有就绪附件不提示。
   用户取消离开不取消/删除工作；模块停止解除监听。浏览器平台限制不冒充可靠持久化。
