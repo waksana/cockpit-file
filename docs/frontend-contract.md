@@ -1,16 +1,14 @@
 # 前端接入契约
 
-## 单一经典入口
+## 入口与共享服务
 
-manifest 只声明 `frontend.entry/styles`（`src/web/index.tsx` 与 `src/web/styles.css`），
-不再包含 `/next` 新版呈现、`frontend.next` 或 `src/web/next`。仍接受可选 `frontend.next`
-的宿主和已移除 next 的宿主都只加载该经典入口；以下外观说明均属于经典界面。
+manifest 声明 `frontend.entry/styles`（`src/web/index.tsx` 与 `src/web/styles.css`）。
 当前为未发行源码（manifest 仍标记 0.2.1，打包前须准备新补丁版本），最低配套宿主为 **Cockpit 0.3.0**。
 SDK 固定为 `0fa433d99c053df2caf80770f0f8762b9ed7002e`，该基础提交不表示最终宿主应用
 或 Release 已完成。
 
 `file-services.ts` 集中注册 FileDrafts、UploadStore、FileProbes、FileInputs 及其释放回调；
-其 context 类型为 `ModuleFrontendServices`，经典入口保留自己的兼容检查。
+其 context 类型为 `ModuleFrontendServices`，入口保留自己的兼容检查。
 `attachments` schema 身份、版本 1 持久化编码与 ACK 规则不变，
 没有新草稿副本、存储迁移或二进制持久化。
 
@@ -32,9 +30,9 @@ SDK 固定为 `0fa433d99c053df2caf80770f0f8762b9ed7002e`，该基础提交不表
 确认离开后仍遵守原来的刷新边界：只恢复就绪草稿，不转移上传任务、不自动重放。
 宿主自行保护其原生 pending/未保存输入，文件模块不增加跨模块导航框架。
 
-## 经典呈现基线
+## 呈现基线
 
-**0.2.0 的经典入口仍使用 Web API v2、公共 UI v1 与独立 shared-surfaces v1；包/后端 API v1 不变。**
+**前端入口继续使用 Web API v2、公共 UI v1 与独立 shared-surfaces v1；包/后端 API v1 不变。**
 精确配套宿主为 `0fa433d99c053df2caf80770f0f8762b9ed7002e`（SDK 源码版本 0.3.0），
 不是已发布或部署的声明。激活在注册贡献前检查
 `context.uiSurfaceVersion === 1`；缺少或不支持时明确拒绝。

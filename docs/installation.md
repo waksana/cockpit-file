@@ -3,9 +3,7 @@
 ## 集成状态
 
 当前为未发行源码，最低配套宿主为 **Cockpit 0.3.0**。
-manifest/package 仍标记 0.2.1，但当前源码已在 0.2.1 之后移除 `/next`，包内容不同；打包或安装前须按 [CONTRIBUTING](../CONTRIBUTING.md#immutable-installation-versions) 准备新的补丁版本，不得以 0.2.1 身份打包安装。
-manifest 只声明经典入口，已移除 `/next` 新版呈现与 `frontend.next`；
-仍接受可选 `frontend.next` 的宿主与已移除 next 的宿主都只加载经典入口。
+manifest/package 仍标记 0.2.1，但当前源码在 0.2.1 之后有未发行变更，包内容不同；打包或安装前须按 [CONTRIBUTING](../CONTRIBUTING.md#immutable-installation-versions) 准备新的补丁版本，不得以 0.2.1 身份打包安装。
 SDK 精确固定为已提交且可独立取得的
 `0fa433d99c053df2caf80770f0f8762b9ed7002e`，module-api/protocol 版本均为 **0.3.0**。
 这是公共协议与组件基础提交，最终宿主应用仍由配套集成交付；不表示已发布或部署。
@@ -13,7 +11,7 @@ SDK 精确固定为已提交且可独立取得的
 构建输出 `dist/web/index.js` / `styles.css`，位于已有公开 asset 根。
 模块只打包自身逻辑和布局样式，公共组件和主题由宿主提供；既有草稿编码不变。
 
-经典入口继续要求 Web API v2、公共 UI v1、
+前端入口要求 Web API v2、公共 UI v1、
 `context.uiSurfaceVersion === 1` 与 `context.createPortal`，激活前缺少任一能力均拒绝。
 模块包和后端 API 仍为 v1，后端行为没有随本次 Web 迁移改变。
 前端 context/返回声明必须是 API v2；不能仅凭宿主版本号或后端 API v1 推断支持。

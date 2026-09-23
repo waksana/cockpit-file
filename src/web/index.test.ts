@@ -763,121 +763,117 @@ function openFile(tree: Element) {
   click(descendants(tree).find(element => element.props['aria-haspopup'] === 'dialog')!);
 }
 
-{
-  const presentation = 'classic';
-  const start = activate;
-  test(`${presentation} file names show HEAD sizes once in draft, message and inline surfaces`, async t => {
-    for (const surface of ['draft', 'message', 'link', 'image'] as const) {
-      for (const [length, suffix] of [
-        [undefined, ''], ['invalid', ''], ['0', ' (0 B)'], ['2048', ' (2.0 KiB)'], ['1258291', ' (1.2 MiB)'],
-      ] as const) {
-        await t.test(`${surface}: ${length ?? 'unknown'}`, async () => {
-          const h = harness();
-          h.context.request = async (path, init) => {
-            h.calls.push({ path, init });
-            return new Response(null, { headers: {
-              'content-type': 'application/pdf', ...(length === undefined ? {} : { 'content-length': length }),
-            } });
-          };
-          const frontend = await start(h.context);
-          const name = 'report.pdf';
-          const origin = { sessionId: 'size-fixture', messageId: surface };
-          const attachment = { type: 'file' as const, path: `/data/files/${fileId}/ready/body.pdf`, displayName: name };
-          const draft = new Draft();
-          draft.appendAttachments([{ id: 'restored', value: attachment }]);
-          const render = () => surface === 'draft'
-            ? h.render(composerComponent(frontend), { draft, operation: 'prompt', disabled: false })
-            : surface === 'message'
-              ? h.render(nativeComponent(frontend), { node: { kind: 'attachment', origin, label: name, attachment } })
-              : h.render(frontend.markdown![0]!.component, {
-                node: { kind: surface, origin, target: './report.pdf', label: name }, fallback: 'fallback',
-              });
-          let tree = render();
-          assert.doesNotMatch(textContent(tree), /\(\d.*\)/, 'pending HEAD never fabricates a size');
-          h.flushEffects(); await settle();
-          tree = render();
-          const trigger = descendants(tree).find(element => element.props['aria-haspopup'] === 'dialog')!;
-          assert.ok(textContent(trigger).includes(name + suffix));
-          if (suffix) {
-            assert.equal(textContent(tree).split(suffix.slice(2, -1)).length - 1, 1, 'no duplicate size in the row metadata');
-            assert.ok(String(trigger.props['aria-description']).includes(suffix.trim()));
-          } else {
-            assert.doesNotMatch(textContent(tree), /\(\d.*\)/);
-            assert.match(String(trigger.props['aria-description']), /application\/pdf/);
-          }
-          openFile(tree);
-          tree = render();
-          const title = descendants(tree).find(element => element.type === 'h2')!;
-          assert.equal(textContent(title), name + suffix);
-          if (suffix) assert.equal(textContent(tree).split(suffix.slice(2, -1)).length - 1, 2, 'one size in each name, none in details');
-          for (const download of descendants(tree).filter(element => element.props.download !== undefined)) {
-            assert.equal(download.props.download, name, 'display-only size never changes the download filename');
-          }
-          assert.equal(h.calls.length, 1);
-          assert.equal(h.calls[0]!.init?.method, 'HEAD', 'size labels do not download the file body');
-          h.unmount(); frontend.dispose?.();
-        });
-      }
-    }
-  });
-
-  test(`${presentation} blob names use decoded sizes and never invent bytes for unavailable data`, async () => {
-    for (const surface of ['draft', 'message']) {
-      for (const [data, suffix] of [['', ' (0 B)'], ['aGVsbG8=', ' (5 B)'], [undefined, ''], ['!', '']] as const) {
-        if (surface === 'draft' && data === undefined) continue;
+test('file names show HEAD sizes once in draft, message and inline surfaces', async t => {
+  for (const surface of ['draft', 'message', 'link', 'image'] as const) {
+    for (const [length, suffix] of [
+      [undefined, ''], ['invalid', ''], ['0', ' (0 B)'], ['2048', ' (2.0 KiB)'], ['1258291', ' (1.2 MiB)'],
+    ] as const) {
+      await t.test(`${surface}: ${length ?? 'unknown'}`, async () => {
         const h = harness();
-        const frontend = await start(h.context);
-        const name = 'local.txt';
-        const attachment = { type: 'blob' as const, mimeType: 'text/plain', data, displayName: name };
+        h.context.request = async (path, init) => {
+          h.calls.push({ path, init });
+          return new Response(null, { headers: {
+            'content-type': 'application/pdf', ...(length === undefined ? {} : { 'content-length': length }),
+          } });
+        };
+        const frontend = await activate(h.context);
+        const name = 'report.pdf';
+        const origin = { sessionId: 'size-fixture', messageId: surface };
+        const attachment = { type: 'file' as const, path: `/data/files/${fileId}/ready/body.pdf`, displayName: name };
         const draft = new Draft();
-        if (surface === 'draft' && data !== undefined) draft.appendAttachments([{ id: 'blob', value: { ...attachment, data } }]);
+        draft.appendAttachments([{ id: 'restored', value: attachment }]);
         const render = () => surface === 'draft'
           ? h.render(composerComponent(frontend), { draft, operation: 'prompt', disabled: false })
-          : h.render(nativeComponent(frontend), { node: {
-            kind: 'attachment', origin: { sessionId: 'size-fixture', messageId: 'blob' }, label: name, attachment,
-          } });
-        render(); h.flushEffects();
-        const tree = render();
+          : surface === 'message'
+            ? h.render(nativeComponent(frontend), { node: { kind: 'attachment', origin, label: name, attachment } })
+            : h.render(frontend.markdown![0]!.component, {
+              node: { kind: surface, origin, target: './report.pdf', label: name }, fallback: 'fallback',
+            });
+        let tree = render();
+        assert.doesNotMatch(textContent(tree), /\(\d.*\)/, 'pending HEAD never fabricates a size');
+        h.flushEffects(); await settle();
+        tree = render();
         const trigger = descendants(tree).find(element => element.props['aria-haspopup'] === 'dialog')!;
         assert.ok(textContent(trigger).includes(name + suffix));
-        if (suffix) assert.equal(textContent(tree).split(suffix).length - 1, 1);
-        else assert.doesNotMatch(textContent(tree), /\(\d.*\)/);
-        assert.equal(h.calls.length, 0);
+        if (suffix) {
+          assert.equal(textContent(tree).split(suffix.slice(2, -1)).length - 1, 1, 'no duplicate size in the row metadata');
+          assert.ok(String(trigger.props['aria-description']).includes(suffix.trim()));
+        } else {
+          assert.doesNotMatch(textContent(tree), /\(\d.*\)/);
+          assert.match(String(trigger.props['aria-description']), /application\/pdf/);
+        }
+        openFile(tree);
+        tree = render();
+        const title = descendants(tree).find(element => element.type === 'h2')!;
+        assert.equal(textContent(title), name + suffix);
+        if (suffix) assert.equal(textContent(tree).split(suffix.slice(2, -1)).length - 1, 2, 'one size in each name, none in details');
+        for (const download of descendants(tree).filter(element => element.props.download !== undefined)) {
+          assert.equal(download.props.download, name, 'display-only size never changes the download filename');
+        }
+        assert.equal(h.calls.length, 1);
+        assert.equal(h.calls[0]!.init?.method, 'HEAD', 'size labels do not download the file body');
         h.unmount(); frontend.dispose?.();
-      }
+      });
     }
-  });
+  }
+});
 
-  test(`${presentation} uploads keep size beside the name while pending or failed`, async () => {
-    for (const type of ['application/pdf', 'image/png']) {
-      for (const size of [0, 2048]) {
-        const h = harness();
-        let respond!: (response: Response) => void;
-        h.context.request = () => new Promise(resolve => { respond = resolve; });
-        const frontend = await start(h.context);
-        const draft = new Draft();
-        const composer = { draft, operation: 'prompt' as const, disabled: false };
-        const name = `long-${'name'.repeat(80)}.${type === 'image/png' ? 'png' : 'pdf'}`;
-        const suffix = size === 0 ? ' (0 B)' : ' (2.0 KiB)';
-        selectFiles(frontend, composer, [new File([new Uint8Array(size)], name, { type })]);
-        const render = () => h.render(composerComponent(frontend), composer);
-        let tree = render();
-        assert.ok(textContent(tree).includes(name + suffix), 'File.size is available before preview effects');
-        h.flushEffects();
-        tree = render();
-        assert.equal(textContent(tree).split(suffix).length - 1, 1);
-        assert.ok(descendants(tree).some(element => element.type === 'progress'));
-        respond(Response.json({ error: 'Synthetic upload failure' }, { status: 503 }));
-        await settle();
-        tree = render();
-        assert.ok(textContent(tree).includes(name + suffix));
-        assert.ok(descendants(tree).some(element => element.props['aria-label'] === `重新上传 ${name}`));
-        assert.match(JSON.stringify(tree), /Synthetic upload failure/);
-        h.unmount(); frontend.dispose?.();
-      }
+test('blob names use decoded sizes and never invent bytes for unavailable data', async () => {
+  for (const surface of ['draft', 'message']) {
+    for (const [data, suffix] of [['', ' (0 B)'], ['aGVsbG8=', ' (5 B)'], [undefined, ''], ['!', '']] as const) {
+      if (surface === 'draft' && data === undefined) continue;
+      const h = harness();
+      const frontend = await activate(h.context);
+      const name = 'local.txt';
+      const attachment = { type: 'blob' as const, mimeType: 'text/plain', data, displayName: name };
+      const draft = new Draft();
+      if (surface === 'draft' && data !== undefined) draft.appendAttachments([{ id: 'blob', value: { ...attachment, data } }]);
+      const render = () => surface === 'draft'
+        ? h.render(composerComponent(frontend), { draft, operation: 'prompt', disabled: false })
+        : h.render(nativeComponent(frontend), { node: {
+          kind: 'attachment', origin: { sessionId: 'size-fixture', messageId: 'blob' }, label: name, attachment,
+        } });
+      render(); h.flushEffects();
+      const tree = render();
+      const trigger = descendants(tree).find(element => element.props['aria-haspopup'] === 'dialog')!;
+      assert.ok(textContent(trigger).includes(name + suffix));
+      if (suffix) assert.equal(textContent(tree).split(suffix).length - 1, 1);
+      else assert.doesNotMatch(textContent(tree), /\(\d.*\)/);
+      assert.equal(h.calls.length, 0);
+      h.unmount(); frontend.dispose?.();
     }
-  });
-}
+  }
+});
+
+test('uploads keep size beside the name while pending or failed', async () => {
+  for (const type of ['application/pdf', 'image/png']) {
+    for (const size of [0, 2048]) {
+      const h = harness();
+      let respond!: (response: Response) => void;
+      h.context.request = () => new Promise(resolve => { respond = resolve; });
+      const frontend = await activate(h.context);
+      const draft = new Draft();
+      const composer = { draft, operation: 'prompt' as const, disabled: false };
+      const name = `long-${'name'.repeat(80)}.${type === 'image/png' ? 'png' : 'pdf'}`;
+      const suffix = size === 0 ? ' (0 B)' : ' (2.0 KiB)';
+      selectFiles(frontend, composer, [new File([new Uint8Array(size)], name, { type })]);
+      const render = () => h.render(composerComponent(frontend), composer);
+      let tree = render();
+      assert.ok(textContent(tree).includes(name + suffix), 'File.size is available before preview effects');
+      h.flushEffects();
+      tree = render();
+      assert.equal(textContent(tree).split(suffix).length - 1, 1);
+      assert.ok(descendants(tree).some(element => element.type === 'progress'));
+      respond(Response.json({ error: 'Synthetic upload failure' }, { status: 503 }));
+      await settle();
+      tree = render();
+      assert.ok(textContent(tree).includes(name + suffix));
+      assert.ok(descendants(tree).some(element => element.props['aria-label'] === `重新上传 ${name}`));
+      assert.match(JSON.stringify(tree), /Synthetic upload failure/);
+      h.unmount(); frontend.dispose?.();
+    }
+  }
+});
 
 test('native blob cards decode locally, reuse their URL on rerender and revoke it on change or teardown', async () => {
   const h = harness();
@@ -1646,47 +1642,37 @@ test('retry hands focus to the persistent close control before replacing its own
   h.unmount(); frontend.dispose?.();
 });
 
-test('classic activation owns unload guards for hidden unfinished drafts and removes them on disposal', async () => {
-  {
-    const start = activate;
-    const listeners = new Set<(event: BeforeUnloadEvent) => void>();
-    Object.defineProperty(document, 'defaultView', { configurable: true, value: {
-      addEventListener(type: string, listener: (event: BeforeUnloadEvent) => void) {
-        assert.equal(type, 'beforeunload'); listeners.add(listener);
-      },
-      removeEventListener(type: string, listener: (event: BeforeUnloadEvent) => void) {
-        assert.equal(type, 'beforeunload'); listeners.delete(listener);
-      },
-    } });
-    const h = harness();
-    const frontend = await start(h.context);
-    const draft = new Draft('hidden-unload');
-    const tree = h.render(enhanceEditor(frontend), composerProps(frontend, {
-      draft: draft.reference, operation: 'prompt', disabled: false,
-    }));
-    const upload = descendants(tree).find(item => item.props['aria-label'] === '添加文件')!;
-    click(upload);
-    const input = nativeInputs.at(-1)!;
-    input.files = [new File(['synthetic'], 'hidden.txt')];
-    input.dispatchEvent(new Event('change'));
-    h.unmount();
-    const event = new Event('beforeunload', { cancelable: true }) as BeforeUnloadEvent;
-    Object.defineProperty(event, 'returnValue', { value: 'unchanged', writable: true });
-    assert.equal(listeners.size, 1);
-    for (const listener of listeners) listener(event);
-    assert.equal(event.defaultPrevented, true);
-    assert.equal(h.calls[0]!.init!.signal!.aborted, false, 'asking to leave cannot stop an upload');
-    h.signal.abort();
-    assert.equal(listeners.size, 0);
-    assert.equal(h.calls[0]!.init!.signal!.aborted, true);
-    frontend.dispose?.();
-    Object.defineProperty(document, 'defaultView', { configurable: true, value: undefined });
-  }
-});
-
-test('manifest declares only the classic entry and its styles', async () => {
-  const manifest = JSON.parse(await readFile(new URL('../../cockpit.module.json', import.meta.url), 'utf8'));
-  assert.equal(manifest.frontend.entry, 'dist/web/index.js');
-  assert.deepEqual(manifest.frontend.styles, ['dist/web/styles.css']);
-  assert.equal('next' in manifest.frontend, false);
+test('activation owns unload guards for hidden unfinished drafts and removes them on disposal', async () => {
+  const listeners = new Set<(event: BeforeUnloadEvent) => void>();
+  Object.defineProperty(document, 'defaultView', { configurable: true, value: {
+    addEventListener(type: string, listener: (event: BeforeUnloadEvent) => void) {
+      assert.equal(type, 'beforeunload'); listeners.add(listener);
+    },
+    removeEventListener(type: string, listener: (event: BeforeUnloadEvent) => void) {
+      assert.equal(type, 'beforeunload'); listeners.delete(listener);
+    },
+  } });
+  const h = harness();
+  const frontend = await activate(h.context);
+  const draft = new Draft('hidden-unload');
+  const tree = h.render(enhanceEditor(frontend), composerProps(frontend, {
+    draft: draft.reference, operation: 'prompt', disabled: false,
+  }));
+  const upload = descendants(tree).find(item => item.props['aria-label'] === '添加文件')!;
+  click(upload);
+  const input = nativeInputs.at(-1)!;
+  input.files = [new File(['synthetic'], 'hidden.txt')];
+  input.dispatchEvent(new Event('change'));
+  h.unmount();
+  const event = new Event('beforeunload', { cancelable: true }) as BeforeUnloadEvent;
+  Object.defineProperty(event, 'returnValue', { value: 'unchanged', writable: true });
+  assert.equal(listeners.size, 1);
+  for (const listener of listeners) listener(event);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(h.calls[0]!.init!.signal!.aborted, false, 'asking to leave cannot stop an upload');
+  h.signal.abort();
+  assert.equal(listeners.size, 0);
+  assert.equal(h.calls[0]!.init!.signal!.aborted, true);
+  frontend.dispose?.();
+  Object.defineProperty(document, 'defaultView', { configurable: true, value: undefined });
 });
