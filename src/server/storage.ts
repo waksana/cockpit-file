@@ -82,6 +82,12 @@ type State = { state: 'pending'; owner: OperationOwner } | { state: 'failed'; er
 type Discard = { version: 1; id: string; owner: OperationOwner };
 type CaptureSource = { paths: readonly string[] };
 
+export const WSL2_GUIDE_URL = 'https://github.com/waksana/cockpit/blob/main/docs/install.md#windows-wsl2';
+
+export function unsupportedPlatformMessage(platform: string): string {
+  return `Cockpit Files requires Linux (current platform: ${platform}). On Windows, run Cockpit inside WSL2: ${WSL2_GUIDE_URL}`;
+}
+
 function failure(code: string, message: string, cause?: unknown): FileStorageError {
   return new FileStorageError(code, message, { cause });
 }
@@ -359,7 +365,7 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
     throw failure('INVALID_ROOT', 'Storage root must be an absolute, normalized private directory');
   }
   if (process.platform !== 'linux' || typeof process.getuid !== 'function') {
-    throw failure('UNSUPPORTED_PLATFORM', 'Verified file storage currently requires Linux /proc/self/fd');
+    throw failure('UNSUPPORTED_PLATFORM', unsupportedPlatformMessage(process.platform));
   }
   const root = options.root;
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
