@@ -10,7 +10,7 @@ import { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import type { TestContext } from 'node:test';
-import { createFileStorage, DEFAULT_MAX_BYTES, FileStorageError } from './storage.ts';
+import { createFileStorage, DEFAULT_MAX_BYTES, FileStorageError, WSL2_GUIDE_URL } from './storage.ts';
 import type { FileStorage, FileStorageOptions } from './storage.ts';
 
 async function fixture(t: TestContext, options: Omit<FileStorageOptions, 'root'> = {}) {
@@ -55,6 +55,26 @@ async function pendingUpload(storage: FileStorage, operationId: string) {
   }
   throw new Error('Upload did not become pending');
 }
+
+test('non-Linux platforms fail early with a Linux/WSL2 message and create nothing', async t => {
+  const parent = resolve('node_modules', '.file-storage-fixtures', randomUUID());
+  const root = join(parent, 'data');
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  for (const platform of ['win32', 'darwin'] as const) {
+    const restore = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { ...restore, value: platform });
+    try {
+      await assert.rejects(createFileStorage({ root }), (error: unknown) => {
+        assert.ok(error instanceof FileStorageError);
+        assert.equal(error.code, 'UNSUPPORTED_PLATFORM');
+        assert.equal(error.message, `Cockpit Files requires Linux (current platform: ${platform}). ` +
+          `On Windows, run Cockpit inside WSL2: ${WSL2_GUIDE_URL}`);
+        return true;
+      });
+    } finally { Object.defineProperty(process, 'platform', restore); }
+  }
+  await assert.rejects(stat(parent), { code: 'ENOENT' });
+});
 
 test('streamed upload commits original and per-file JSON together with a safe stable identity', async t => {
   const { storage, root } = await fixture(t);

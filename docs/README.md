@@ -124,7 +124,7 @@ Agent 用原生工具生成文件，正常回复 Markdown
 | 预览 | 按字节识别的图片/视频/音频；SVG 使用受限图片模式，HTML/PDF 不内嵌 |
 | 读取 | HEAD 有界探测，202/404 在总五秒内重试；ready 后不自动下载媒体，点击预览才读取原 URL |
 | 存储 | files/<id>/ready/body[.extension] 与 JSON；URL 保留 body 文件名，实现纯函数互逆 |
-| 平台 | Node 24.20.0，Linux；依赖 /proc/self/fd 固定读取句柄，没有不安全的其他平台 fallback |
+| 平台 | Node 24.20.0，Linux；依赖 /proc/self/fd 固定读取句柄，没有不安全的其他平台 fallback；其他平台报 `UNSUPPORTED_PLATFORM`，Windows 用 [WSL2](https://github.com/waksana/cockpit/blob/main/docs/install.md#windows-wsl2) |
 | Markdown 边界 | 流式 best effort，不是完整 CommonMark；引用式定义等复杂形式目前不自动捕获 |
 
 ## 7. 开发与后续

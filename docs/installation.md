@@ -35,6 +35,7 @@ Source code ZIP/tar 不是模块安装包。只有源码开发需要执行 SDK �
 ## 1. 条件
 
 - 与宿主一致的 Node **24.20.0**；本模块存储实现要求 Linux 与 `/proc/self/fd`。
+  其他平台启动时明确报 `UNSUPPORTED_PLATFORM`；Windows 请按宿主 [WSL2 指南](https://github.com/waksana/cockpit/blob/main/docs/install.md#windows-wsl2) 在 WSL2 中运行。
 - 源码构建使用 pnpm **10.34.5**；模块运行时无需 pnpm。
 - 模块代码与宿主同进程，必须可信；原生数据和认证由宿主/Copilot 管理。
 - 本次只支持本地 `.tgz` 安装，远程签名 URL 安装尚未实现。
