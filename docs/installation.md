@@ -2,9 +2,9 @@
 
 ## 集成状态
 
-当前为未发行源码，最低配套宿主为 Cockpit 未发行 main 提交 **`1323991`**（包版本 0.4.4）。
+当前为版本准备源码 **0.2.2**，最低配套宿主为 Cockpit 未发行 main 提交 **`1323991`**（包版本 0.4.4）。
 The manifest declares default `instructions`; hosts that predate this field (including 0.3.0) reject the module.
-manifest/package 仍标记 0.2.1，但当前源码在 0.2.1 之后有未发行变更，包内容不同；打包或安装前须按 [CONTRIBUTING](../CONTRIBUTING.md#immutable-installation-versions) 准备新的补丁版本，不得以 0.2.1 身份打包安装。
+manifest/package 标记 0.2.2；相对 0.2.1 的包内容已改变，须使用新的不可变版本身份，不能以 0.2.1 身份打包安装。
 SDK 精确固定为已提交且可独立取得的
 `13239911066ab8729a4453d5d2657f11611ce06f`，module-api/protocol 版本均为 **0.4.4**。
 该宿主提交尚未发行；宿主与模块须配套交付，不表示已发布或部署。
@@ -68,7 +68,7 @@ pnpm package
 ```
 
 默认输出为 `module-output/cockpit-file-<version>.tgz` 及其 `.sha256`（不表示已发布）。
-当前源码须先准备新补丁版本再打包安装，见上文集成状态。
+当前源码已准备为新的补丁版本；打包安装仍须使用干净已提交源码，见上文集成状态。
 
 输出目录必须不存在，也可以 `pnpm package /absolute/new/output` 指定新目录。
 打包要求干净的已提交源码；修改后先提交再重新 build，不能复用旧构建凭据。

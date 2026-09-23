@@ -1,8 +1,8 @@
 # Cockpit File 文档
 
-**当前为未发行源码，最低配套宿主为 Cockpit 未发行 main 提交 `1323991`（包版本 0.4.4）。**
+**当前为版本准备源码 0.2.2，最低配套宿主为 Cockpit 未发行 main 提交 `1323991`（包版本 0.4.4）。**
 The module ships [default instructions](../src/instructions.md) asking agents to give files as Markdown links/images.
-manifest/package 仍标记 0.2.1，但当前源码在 0.2.1 之后有未发行变更，包内容不同；打包或安装前须按 [CONTRIBUTING](../CONTRIBUTING.md#immutable-installation-versions) 准备新的补丁版本，不得以 0.2.1 身份打包安装。
+manifest/package 标记 0.2.2；相对 0.2.1 的包内容已改变，须使用新的不可变版本身份，不能以 0.2.1 身份打包安装。
 组件与浏览器离开保护见[前端接入契约](frontend-contract.md)。既有持久化草稿编码不变。
 
 前端使用 Web API v2、公共 UI v1 / shared-surfaces v1。尚未声明发布或部署。

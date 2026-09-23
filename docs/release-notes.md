@@ -1,10 +1,11 @@
-# Unreleased source changes
+# Cockpit File 0.2.2
 
 - The manifest declares default `instructions` (`dist/instructions.md`, from
   `src/instructions.md`): agents are told to give files as Markdown links/images in the
   reply body. Hosts that predate the field, including 0.3.0, reject this manifest.
 - SDK pin: host commit `13239911066ab8729a4453d5d2657f11611ce06f` (module-api/protocol 0.4.4,
-  not yet released). Package bytes change; prepare a new version before packaging for installation.
+  not yet released). Package bytes change from 0.2.1; use this fresh immutable package identity
+  for coordinated installation only after the paired host is available.
 
 # Cockpit File 0.2.1 (source preparation)
 
