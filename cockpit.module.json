@@ -7,10 +7,6 @@
   "frontend": {
     "entry": "dist/web/index.js",
     "styles": ["dist/web/styles.css"],
-    "assets": ["dist/web", "dist/shared"],
-    "next": {
-      "entry": "dist/web/next/index.js",
-      "styles": ["dist/web/next/styles.css"]
-    }
+    "assets": ["dist/web", "dist/shared"]
   }
 }

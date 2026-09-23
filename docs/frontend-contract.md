@@ -1,45 +1,24 @@
 # 前端接入契约
 
-<a id="independent-next-ui"></a>
-## 独立新版（集成准备）
+## 单一经典入口
 
-新增 `src/web/next/index.tsx` 与 `src/web/next/styles.css`，manifest 通过
-`frontend.next.entry/styles` 声明独立输出，共用现有 `frontend.assets` 根。
-经典仍使用 `src/web/index.tsx` 和原 `styles.css`；两套入口只加载各自的呈现，
-缺少新版的模块不能借经典呈现补位。以下原有具体外观说明属于经典界面，不约束新版布局。
-本分支准备版本为 **0.2.1**，最低配套宿主为支持新版呈现的 **Cockpit 0.3.0**。
+manifest 只声明 `frontend.entry/styles`（`src/web/index.tsx` 与 `src/web/styles.css`），
+不再包含 `/next` 新版呈现、`frontend.next` 或 `src/web/next`。仍接受可选 `frontend.next`
+的宿主和已移除 next 的宿主都只加载该经典入口；以下外观说明均属于经典界面。
+本分支准备版本为 **0.2.1**，最低配套宿主为 **Cockpit 0.3.0**。
 SDK 固定为 `0fa433d99c053df2caf80770f0f8762b9ed7002e`，该基础提交不表示最终宿主应用
-或 Release 已完成。旧宿主可能拒绝双入口 manifest，经典回退也需要支持该 manifest 的宿主。
+或 Release 已完成。
 
-新版检查 Web API v2、`context.ui.version === 1` 与 draft schema 能力，
-不要求或伪称经典 `uiVersion/uiSurfaceVersion`。公共组件只从 `context.ui` 取得；
-使用 Button、Dialog 的 content/header/title/description/footer 和 Alert/AlertDescription。
-保留宿主标准关闭按钮，重试控件替换前只在焦点确实位于该控件时移到稳定的 DialogContent；
-关闭后返回仍存在的触发控件。Dialog 的 portal、模态与焦点限制由同一宿主组件实例负责。
-不导入宿主私有文件，不携带 React/Radix 运行时，也不需要额外模块专用 shadcn primitive。
-
-新版信息结构：
-
-- composer 的附件区显示完整可换行文件名、大小/状态与各项取消、移除、重试；失败原因属于对应项。
-- 原生消息附件沿用同一文件详情入口；Markdown 仍为原生行内 `a[href]`，保留修饰键/中键。
-- 共享详情弹窗按需展示媒体，保留独立 HEAD/媒体五秒预算、原件下载与各类错误恢复。
-- 文件项不复制经典固定行高与空动作槽；窄容器中名称、错误和动作自然换行。
-  输入、发送、IME、原生决策和聊天滚动仍归宿主。
-
-`file-services.ts` 集中注册两套呈现共同的 FileDrafts、UploadStore、FileProbes、FileInputs
-及其释放回调。共享代码的 context 类型为 `ModuleFrontendServices`，经典入口仍保留自己的兼容检查。
-`cfn-*` CSS 仅负责模块布局并继承宿主公共新主题变量，不重定义组件主题、`ck-*` 或全局 reset，
-不依赖宿主 Tailwind 扫描外部模块源码。
-主题直接继承宿主 CSS 的系统明暗偏好，不在绘制后切换 class；
-不使用 Tooltip/provider 或独立 Separator，必要名称和错误不依赖悬浮提示。
-两套呈现保持相同的 `attachments` schema 身份、版本 1 持久化编码与 ACK 规则，
+`file-services.ts` 集中注册 FileDrafts、UploadStore、FileProbes、FileInputs 及其释放回调；
+其 context 类型为 `ModuleFrontendServices`，经典入口保留自己的兼容检查。
+`attachments` schema 身份、版本 1 持久化编码与 ACK 规则不变，
 没有新草稿副本、存储迁移或二进制持久化。
 
-两套呈现的草稿附件、消息附件、模块接管的 Markdown 引用及详情标题均将已知大小紧跟在名称后，
+草稿附件、消息附件、模块接管的 Markdown 引用及详情标题均将已知大小紧跟在名称后，
 例如 `report.pdf (1.2 MiB)`，不在状态栏或详情行重复大小。单位复用 `formatBytes` 的 B/KiB/MiB；
 空文件显示 `(0 B)`，未知大小不加括号、不伪造为零，保留原有状态或类型信息。
 大小仅来自现有上传 File、本地解码 Blob 或 HEAD 元数据，不为大小额外下载正文。
-经典附件行仍截断长名称并保留扩展名和大小；新版及行内引用仍可自然折行。
+附件行截断长名称并保留扩展名和大小；行内引用仍可自然折行。
 
 ### 离开页面保护
 
