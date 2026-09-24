@@ -2,9 +2,9 @@
 
 ## 集成状态
 
-当前为版本准备源码 **0.2.3**，最低配套宿主为 Cockpit 未发行 main 提交 **`1323991`**（包版本 0.4.4）。
+当前为版本准备源码 **0.2.4**，配套宿主为 Cockpit **0.4.7**。
 The manifest declares default `instructions`; hosts that predate this field (including 0.3.0) reject the module.
-manifest/package 标记 0.2.3；相对 0.2.2 的包内容已改变，须使用新的不可变版本身份，不能以 0.2.2 身份打包安装。
+manifest/package 标记 0.2.4；相对 0.2.3 的包内容已改变，须使用新的不可变版本身份，不能以 0.2.3 身份打包安装。
 SDK 精确固定为已提交且可独立取得的
 `13239911066ab8729a4453d5d2657f11611ce06f`，module-api/protocol 版本均为 **0.4.4**。
 该宿主提交尚未发行；宿主与模块须配套交付，不表示已发布或部署。
@@ -23,10 +23,13 @@ SDK 精确固定为已提交且可独立取得的
 不能先运行新宿主却期待旧模块前端继续兼容。CI 不执行安装、部署或重启。
 已发行 0.1.6 的使用方法和兼容条件见其 tag 文档，不把本开发分支当成已发布资产。
 
-从 [v0.1.7 Release](https://github.com/waksana/cockpit-file/releases/tag/v0.1.7)
-下载 `cockpit-file-0.1.7.tgz` 和 `cockpit-file-0.1.7.tgz.sha256`，
-执行 `sha256sum -c cockpit-file-0.1.7.tgz.sha256` 后按下方安装步骤启用。
-若资产尚未发布，不能用旧包冒充这次 Web 接入迁移。
+After [v0.2.4 Release](https://github.com/waksana/cockpit-file/releases/tag/v0.2.4)
+is published, download `cockpit-file-0.2.4.tgz` and
+`cockpit-file-0.2.4.tgz.sha256`, then run
+`sha256sum -c cockpit-file-0.2.4.tgz.sha256` before installation.
+Before publication, an explicitly authorized joint deployment uses the unchanged
+successful CI archive for the exact merged main commit. An older package is not
+a substitute for this version, and a CI archive is not a published Release.
 Source code ZIP/tar 不是模块安装包。只有源码开发需要执行 SDK 准备和构建步骤。
 
 安装前了解[复制标签页与删除的已知限制](release-notes.md#known-limitation)：
@@ -85,8 +88,7 @@ React 与 portal 渲染器由宿主注入，
 先校验下载/生成的包摘要，然后在 **Cockpit 包根**执行：
 
 ```sh
-node --import ./apps/server/node_modules/tsx/dist/loader.mjs \
-  apps/server/src/module-cli.ts install \
+node --enable-source-maps apps/server/dist/module-cli.js install \
   /absolute/path/cockpit-file-<version>.tgz --trust-local-code --enable
 ```
 
@@ -96,7 +98,7 @@ node --import ./apps/server/node_modules/tsx/dist/loader.mjs \
 首次启动宿主：
 
 ```sh
-node --import ./apps/server/node_modules/tsx/dist/loader.mjs apps/server/src/index.ts
+node --enable-source-maps apps/server/dist/index.js
 ```
 
 如果服务已经运行，需要在用户授权后让旧实例正常退出，再启动新实例。
@@ -104,8 +106,10 @@ node --import ./apps/server/node_modules/tsx/dist/loader.mjs apps/server/src/ind
 也可只预安装并选中新版本，保留当前实例直到用户另行授权的正常退出。
 此时 installed/selected 是新版本，active 仍是旧版本；不是已经上线。
 安装前后使用同一真实 `COCKPIT_HOME` 查询并保留配置、包摘要与实例身份记录。
-需要撤回待生效选择时，使用 `module-cli.ts enable cockpit-file --version <旧版本> --digest <旧摘要>`，
-保留当前配置参数和其他模块选择；不要整份覆盖历史配置。
+To revert only a next-start selection, run
+`node --enable-source-maps apps/server/dist/module-cli.js enable cockpit-file --version <previous-version> --digest <previous-digest>`.
+Preserve current configuration and other module selections; do not overwrite
+the entire configuration with a historical copy.
 本模块使用本体已有的 Copilot 认证，不增加文件模块账号或登录流程。
 
 ## 4. 数据根与配置
@@ -167,16 +171,15 @@ Copilot 原生会话和认证使用自己的默认目录及配置，不受 `COCK
 在 Cockpit 包根查询：
 
 ```sh
-node --import ./apps/server/node_modules/tsx/dist/loader.mjs \
-  apps/server/src/module-cli.ts list --server http://127.0.0.1:8771
+node --enable-source-maps apps/server/dist/module-cli.js \
+  list --server http://127.0.0.1:8771
 ```
 
 区分 installed、selected 和运行中的 active 状态；服务不可达会明确报告。
 停用只影响下一次启动：
 
 ```sh
-node --import ./apps/server/node_modules/tsx/dist/loader.mjs \
-  apps/server/src/module-cli.ts disable cockpit-file
+node --enable-source-maps apps/server/dist/module-cli.js disable cockpit-file
 ```
 
 更新先生成新的模块版本包再安装；同版本不同摘要拒绝覆盖。
