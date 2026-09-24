@@ -321,6 +321,7 @@ project 显式生成原生 `{ attachments: values }`，不把模块 UI 身份、
 用户发送时，本体一次捕获文字、就绪附件及其修订身份，执行一次原生调用。
 允许只有附件而没有文字的普通 prompt。
 原生 ask/plan-feedback 等操作使用独立请求草稿，文件 schema 不适用。
+编辑器仍显示禁用的上传按钮，提示当前操作不接受附件；不显示附件列表、不安装粘贴或拖放文件处理。
 不读取或提交缓存 prompt 的字段，也不擅自把回答改为普通 prompt。
 旁边存在工具 elicitation 卡片不会把文字编辑器的普通 prompt 改成 elicitation 回答；
 编辑器操作类型跟随它实际调用的原生 API。

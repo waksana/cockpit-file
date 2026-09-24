@@ -564,7 +564,11 @@ test('fresh decision drafts hide prompt files while captured uploads settle only
   ask.editText('Separate answer');
   const askProps = composerProps(frontend, { draft: ask.reference, operation: 'ask', disabled: false });
   const before = h.render(enhanceComposer(frontend), askProps);
-  assert.equal(descendants(before).some(element => element.props.className === 'cf-attachments' || element.props['aria-label'] === '添加文件'), false);
+  assert.equal(descendants(before).some(element => element.props.className === 'cf-attachments'), false);
+  const askUpload = descendants(before).find(element => element.props['aria-label'] === '添加文件')!;
+  assert.equal(askUpload.props.className, 'ck-icon-button');
+  assert.equal(askUpload.props.disabled, true);
+  assert.equal(askUpload.props.title, '当前操作不接受附件');
   assert.equal(editorHandlers(frontend, askProps).onPaste, undefined);
   assert.equal(fileScopes.has(ask.reference), false);
   picker.files = [new File(['file'], 'prompt.txt')];
@@ -585,11 +589,35 @@ test('fresh decision drafts hide prompt files while captured uploads settle only
     const decision = new Draft(prompt.sessionId, { kind, requestId: 'other-request' });
     const tree = h.render(composerComponent(frontend), { draft: decision, operation: kind, disabled: false });
     assert.equal(descendants(tree).some(element => String(element.props.className).startsWith('cf-')), false);
+    const upload = descendants(tree).find(element => element.props['aria-label'] === '添加文件')!;
+    assert.equal(upload.props.disabled, true);
+    assert.equal(upload.props.title, '当前操作不接受附件');
     assert.equal(fileScopes.has(decision.reference), false);
   }
   const restored = h.render(composerComponent(frontend), { draft: prompt, operation: 'prompt', disabled: false });
   assert.equal(descendants(restored).filter(element => element.props.className === 'cf-row').length, 1);
   assert.equal(h.calls.filter(call => call.init?.method === 'POST').length, 1);
+  h.unmount(); frontend.dispose?.();
+});
+
+test('decision editor shows disabled upload affordance without installing file input handlers', async () => {
+  const h = harness();
+  const frontend = await activate(h.context);
+  for (const operation of ['ask', 'plan', 'elicitation'] as const) {
+    const draft = new Draft('synthetic-session', { kind: operation, requestId: `${operation}-request` });
+    let inherited = 0;
+    const props = composerProps(frontend, { draft, operation, disabled: false });
+    const inheritedPaste = (event: ReturnType<typeof fileEvent>) => { inherited++; assert.equal(event.defaultPrevented, false); };
+    const handlers = editorHandlers(frontend, { ...props, onPaste: inheritedPaste });
+    const event = fileEvent([new File(['answer'], `${operation}.txt`)]);
+    handlers.onPaste?.(event);
+    assert.equal(inherited, 1);
+    assert.equal(event.defaultPrevented, false);
+    assert.equal(handlers.onDrop, undefined);
+    assert.equal(handlers.onDragOver, undefined);
+    assert.equal(h.calls.length, 0);
+    assert.equal(draft.blocks, 0);
+  }
   h.unmount(); frontend.dispose?.();
 });
 
@@ -1082,7 +1110,10 @@ test('attachment action is an accessible borderless icon, not a boxed label', as
   assert.equal(descendants(button).some(element => element.type === 'span'), false);
   const ask = new Draft(draft.sessionId, { kind: 'ask', requestId: 'question' });
   const answer = h.render(composerComponent(frontend), { draft: ask, operation: 'ask', disabled: false });
-  assert.equal(descendants(answer).some(element => element.props['aria-label'] === '添加文件'), false);
+  const unavailable = descendants(answer).find(element => element.props['aria-label'] === '添加文件')!;
+  assert.equal(unavailable.props.className, 'ck-icon-button');
+  assert.equal(unavailable.props.disabled, true);
+  assert.equal(unavailable.props.title, '当前操作不接受附件');
   assert.equal(descendants(answer).some(element => element.props['aria-label'] === 'native send'), true);
   frontend.dispose?.();
 });
