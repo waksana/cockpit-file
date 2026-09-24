@@ -95,7 +95,8 @@ tag's Release workflow succeeds; publication is not installation or restart.
   editor-row middleware. The host has no file dispatcher or handoff contract.
   Captured draft state outlives component/session navigation.
 - Native questions use separate request-keyed drafts; prompt text/files stay cached
-  and return when the decision ends. File UI is absent on inapplicable draft purposes.
+  and return when the decision ends. Inapplicable draft purposes show only a disabled
+  upload affordance; attachment lists and file input handlers remain prompt-only.
 - Middleware adds no HTML wrapper or empty placeholder. Preserve the existing
   compact 40px/44px rows, true inline references, independent actions and body portals.
 - HTTP behavior, capture/storage, native attachment delivery and preview deadlines

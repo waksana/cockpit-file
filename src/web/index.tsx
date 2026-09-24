@@ -60,6 +60,18 @@ export const activate: ActivateFrontend = context => {
       </button>;
   }
 
+  function DisabledUploadAction() {
+    return <button
+        type="button"
+        className="ck-icon-button"
+        disabled
+        title="当前操作不接受附件"
+        aria-label="添加文件"
+      >
+        <Icon name="paperclip" />
+      </button>;
+  }
+
   function composeInput<Event extends SyntheticEvent>(
     inherited: ((event: Event) => void) | undefined, handle: (event: Event) => void,
   ) {
@@ -419,8 +431,10 @@ export const activate: ActivateFrontend = context => {
       boundary: 'composerEditor',
       wrap: Base => function FileEditor(props) {
         if (services.disposed) return <Base {...props} />;
+        if (props.operation !== 'prompt') return <Base {...props}
+          children={<>{props.children}<DisabledUploadAction /></>} />;
         const draft = fileDrafts.get(props.draft);
-        if (!draft || props.operation !== 'prompt') return <Base {...props} />;
+        if (!draft) return <Base {...props} />;
         const composer: FileComposerContext = { draft, operation: props.operation, disabled: props.disabled };
         return <Base {...props}
           children={<>{props.children}<UploadAction {...composer} /></>}
