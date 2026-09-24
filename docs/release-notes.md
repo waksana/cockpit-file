@@ -1,3 +1,12 @@
+# Cockpit File 0.2.4
+
+- Keep the upload control visible but disabled while a native ask, plan or MCP
+  confirmation is awaiting a decision, matching Cockpit 0.4.7 input ownership.
+- Reject picker, paste and drag/drop capture during that answering state without
+  changing existing drafts or persisted files.
+- No storage migration or backend behavior change is required. The SDK pin
+  remains `13239911066ab8729a4453d5d2657f11611ce06f`.
+
 # Cockpit File 0.2.3
 
 - Storage startup errors on unsupported platforms now point users to Linux/WSL2 instead of implying

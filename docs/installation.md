@@ -2,9 +2,9 @@
 
 ## 集成状态
 
-当前为版本准备源码 **0.2.3**，最低配套宿主为 Cockpit 未发行 main 提交 **`1323991`**（包版本 0.4.4）。
+当前为版本准备源码 **0.2.4**，配套宿主为 Cockpit **0.4.7**。
 The manifest declares default `instructions`; hosts that predate this field (including 0.3.0) reject the module.
-manifest/package 标记 0.2.3；相对 0.2.2 的包内容已改变，须使用新的不可变版本身份，不能以 0.2.2 身份打包安装。
+manifest/package 标记 0.2.4；相对 0.2.3 的包内容已改变，须使用新的不可变版本身份，不能以 0.2.3 身份打包安装。
 SDK 精确固定为已提交且可独立取得的
 `13239911066ab8729a4453d5d2657f11611ce06f`，module-api/protocol 版本均为 **0.4.4**。
 该宿主提交尚未发行；宿主与模块须配套交付，不表示已发布或部署。
