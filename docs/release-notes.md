@@ -1,3 +1,13 @@
+# Cockpit File 0.2.3
+
+- Storage startup errors on unsupported platforms now point users to Linux/WSL2 instead of implying
+  generic platform support.
+- Release process documentation now points to Cockpit's release-after-joint-deployment policy.
+- SDK pin remains host commit `13239911066ab8729a4453d5d2657f11611ce06f` (module-api/protocol
+  0.4.4, not the final host release). This package identity is prepared for the 2026-09-24
+  afternoon joint deployment with Cockpit 0.4.6 once that unreleased paired host is available;
+  source preparation does not tag, publish, install or restart anything.
+
 # Cockpit File 0.2.2
 
 - The manifest declares default `instructions` (`dist/instructions.md`, from

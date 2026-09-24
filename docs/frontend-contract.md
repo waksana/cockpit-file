@@ -3,7 +3,7 @@
 ## 入口与共享服务
 
 manifest 声明 `frontend.entry/styles`（`src/web/index.tsx` 与 `src/web/styles.css`）。
-当前为版本准备源码 0.2.2，最低配套宿主为未发行 main 提交 **`1323991`**。
+当前为版本准备源码 0.2.3，最低配套宿主为未发行 main 提交 **`1323991`**。
 SDK 固定为 `13239911066ab8729a4453d5d2657f11611ce06f`（包版本 0.4.4），不表示宿主 Release 已完成。
 
 `file-services.ts` 集中注册 FileDrafts、UploadStore、FileProbes、FileInputs 及其释放回调；
