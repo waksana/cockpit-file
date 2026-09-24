@@ -171,16 +171,15 @@ Copilot 原生会话和认证使用自己的默认目录及配置，不受 `COCK
 在 Cockpit 包根查询：
 
 ```sh
-node --import ./apps/server/node_modules/tsx/dist/loader.mjs \
-  apps/server/src/module-cli.ts list --server http://127.0.0.1:8771
+node --enable-source-maps apps/server/dist/module-cli.js \
+  list --server http://127.0.0.1:8771
 ```
 
 区分 installed、selected 和运行中的 active 状态；服务不可达会明确报告。
 停用只影响下一次启动：
 
 ```sh
-node --import ./apps/server/node_modules/tsx/dist/loader.mjs \
-  apps/server/src/module-cli.ts disable cockpit-file
+node --enable-source-maps apps/server/dist/module-cli.js disable cockpit-file
 ```
 
 更新先生成新的模块版本包再安装；同版本不同摘要拒绝覆盖。
