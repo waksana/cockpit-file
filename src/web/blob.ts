@@ -1,4 +1,4 @@
-import type { NativeAttachmentDescriptor } from '@cockpit/module-api';
+import type { NativeAttachmentDescriptor } from '@waksana/cockpit-module-sdk';
 
 export type NativeBlob = Extract<NativeAttachmentDescriptor, { type: 'blob' }>;
 

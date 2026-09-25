@@ -7,7 +7,7 @@ import type {
   ActivateFrontend, AttachmentProps, ComposerEditorProps, ComposerProps, ComposerTarget,
   DraftPurpose, DraftReference, DraftSchemaScope, HostSnapshot, MarkdownNode, MarkdownRendererProps, ModuleDraft, ModuleDraftSnapshot,
   ModuleFrontend, ModuleFrontendContext, ModuleStateRegistry,
-} from '@cockpit/module-api';
+} from '@waksana/cockpit-module-sdk/frontend';
 import type { ClipboardEvent, ComponentType, DragEvent } from 'react';
 import { fileDraftSchema, type FileAttachment, type FileState } from './file-draft.ts';
 

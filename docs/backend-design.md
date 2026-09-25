@@ -190,7 +190,7 @@ URL 可确定性生成，不代表后端一定有文件；未捕获的旧引用�
 
 文件模块以一个固定版本包交付后端 ESM 入口、前端 ESM/CSS 和必要资源。
 静态声明至少说明稳定 moduleId、版本、宿主兼容条件及实际入口；
-字段和导出函数以宿主 `packages/module-api/src/index.ts` 及 manifest 校验为准。
+Backend fields and exports follow `@waksana/cockpit-module-sdk/backend` and host manifest validation.
 
 | 交付条件 | 要求 |
 | --- | --- |

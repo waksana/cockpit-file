@@ -1,13 +1,14 @@
 # Cockpit File 文档
 
-**当前为版本准备源码 0.2.4，配套 Cockpit 0.4.7。**
+**Current source contains an unreleased SDK-consumer migration on top of File 0.2.4.**
 The module ships [default instructions](../src/instructions.md) asking agents to give files as Markdown links/images.
-manifest/package 标记 0.2.4；相对 0.2.3 的包内容已改变，须使用新的不可变版本身份，不能以 0.2.3 身份打包安装。
+Package/manifest versions remain 0.2.4 for source work; changed bytes need a fresh coordinated release version before installation.
 组件与浏览器离开保护见[前端接入契约](frontend-contract.md)。既有持久化草稿编码不变。
 
 前端使用 Web API v2、公共 UI v1 / shared-surfaces v1。尚未声明发布或部署。
-精确支持 SHA 由[安装指南](installation.md)与 `tooling/host-sdk.json` 记录，不以旧发行版本推断新能力。
-固定基础提交提供 SDK 与组件合同，不表示最终宿主应用已交付。
+The published SDK is pinned in `package.json` / `pnpm-lock.yaml`; the separate exact
+integration host is in `tooling/host-integration.json` and the [installation guide](installation.md).
+Neither SDK semver nor a successful build proves host capability or deployment.
 可下载包以该 tag 的 Release workflow 成功发布的资产为准，发行不自动安装。
 包/后端 API 仍为 v1。本次只迁移 Web 接入，不修改文件捕获、存储或 HTTP 行为。
 远程安装、全局文件库和旧历史补抓不在当前实现中。
@@ -101,16 +102,17 @@ Agent 用原生工具生成文件，正常回复 Markdown
 
 ## 5. 当前源码依据
 
-当前构建的不可变宿主 SDK 基线由 `tooling/host-sdk.json` 唯一定义，
-包含 Web API v2 的 state、组件 middleware 和 Markdown 契约；包/后端 API 仍为 v1。
+Builds use the exact published `@waksana/cockpit-module-sdk@0.2.0`, without generated
+host declarations or a host checkout. It supplies Web API v2 state, component middleware
+and Markdown contracts; package/backend API v1 and runtime capability checks remain.
 原生 SDK 1.0.13、bundled runtime 1.0.83 / protocol 3 不因本次 Web 迁移改变。
 详细代码接点写在前后端主题文档中；这里不以旧文件系统或旧 CI 作为本次实现完成证据。
 
 相关宿主文档：
 [模块设计](https://github.com/waksana/cockpit/blob/main/docs/module-contract-draft.md)、
 [产品边界](https://github.com/waksana/cockpit/blob/main/docs/product-requirements.md)。
-公共 ABI 以 Cockpit `packages/module-api/src/index.ts` 为权威；
-本仓库通过导出的真实 SDK 类型构建，不维护另一份接口声明。
+The public ABI is defined by the SDK's common, `/backend`, `/frontend` and `/runtime`
+entries, owned by Cockpit `packages/module-api`; this repository does not copy declarations.
 未合入/发布的源码不能当成已经上线的服务或可下载 Release。
 
 ## 6. 当前具体选择与限制

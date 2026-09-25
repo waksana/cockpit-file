@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type {
   DraftPurpose, DraftReference, DraftSchemaScope, ModuleDraft, ModuleDraftSnapshot, ModuleStateRegistry,
-} from '@cockpit/module-api';
+} from '@waksana/cockpit-module-sdk/frontend';
 import type { ClipboardEvent, DragEvent } from 'react';
 import { registerFileDrafts, type FileComposerContext, type FileState } from './file-draft.ts';
 import { FileInputs } from './file-input.ts';

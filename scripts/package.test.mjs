@@ -67,7 +67,7 @@ test('packaging rejects dirty source, stale builds, SDK changes and tampered dis
   await writeFile(join(f.root, 'dist/web.js'), 'Changed output');
   await assert.rejects(packageModule(f.root, f.output), /stale or modified/);
   await f.receipt();
-  await writeFile(join(f.root, '.cockpit-sdk/protocol/package.json'), '{"version":"changed"}');
+  await writeFile(join(f.root, 'node_modules', f.pin.name, 'package.json'), '{"version":"changed"}');
   await assert.rejects(packageModule(f.root, f.output), /SDK differs/);
 });
 

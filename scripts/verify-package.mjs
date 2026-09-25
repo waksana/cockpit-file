@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import { basename, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { git, INSTRUCTIONS_LIMIT, loadSdkPin, sameJson } from './build-identity.mjs';
+import { git, INSTRUCTIONS_LIMIT, lockedSdkIdentity, sameJson } from './build-identity.mjs';
 
 export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-parse', 'HEAD'])) {
   assert.match(sourceSha, /^[a-f0-9]{40}$/);
@@ -31,7 +31,7 @@ export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-p
   assert.equal(build.node, process.versions.node);
   assert.equal(build.platform, 'linux');
   assert.equal(build.arch, 'x64');
-  assert.ok(sameJson(build.sdk, await loadSdkPin(root)), 'Build used a different host SDK');
+  assert.ok(sameJson(build.sdk, await lockedSdkIdentity(root)), 'Build used a different SDK package');
   assert.ok(Array.isArray(build.files));
   const expected = new Set(['module-build.json']);
   for (const file of build.files) {

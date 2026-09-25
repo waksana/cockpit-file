@@ -1,4 +1,4 @@
-import type { ModuleFrontendContext } from '@cockpit/module-api';
+import type { ModuleFrontendContext } from '@waksana/cockpit-module-sdk/frontend';
 import { registerFileDrafts } from './file-draft.ts';
 import { FileInputs } from './file-input.ts';
 import { DEFAULT_MAX_BYTES, FileProbes, UploadStore } from './file-state.ts';

@@ -2,12 +2,16 @@
 
 ## 集成状态
 
-当前为版本准备源码 **0.2.4**，配套宿主为 Cockpit **0.4.7**。
+Current source contains an unreleased SDK-consumer migration on top of File **0.2.4**.
 The manifest declares default `instructions`; hosts that predate this field (including 0.3.0) reject the module.
-manifest/package 标记 0.2.4；相对 0.2.3 的包内容已改变，须使用新的不可变版本身份，不能以 0.2.3 身份打包安装。
-SDK 精确固定为已提交且可独立取得的
-`13239911066ab8729a4453d5d2657f11611ce06f`，module-api/protocol 版本均为 **0.4.4**。
-该宿主提交尚未发行；宿主与模块须配套交付，不表示已发布或部署。
+The build dependency is the published **`@waksana/cockpit-module-sdk@0.2.0`** from
+`https://npm.pkg.github.com`, pinned exactly in `package.json` and `pnpm-lock.yaml`.
+The integration host is mainline commit `7d69b6f348e17f098bc5562fdbec317e8e2e4ba6`,
+recorded separately in [`tooling/host-integration.json`](../tooling/host-integration.json).
+It is not required to build or package the module. SDK and host versions are independent.
+Package/manifest metadata remain 0.2.4; this migration does not assign a consumer release,
+publish, deploy or restart anything. A later coordinated release must assign a fresh
+version before installing changed package bytes. Historical 0.2.4 notes are not migration release notes.
 
 构建输出 `dist/web/index.js` / `styles.css`，位于已有公开 asset 根。
 模块只打包自身逻辑和布局样式，公共组件和主题由宿主提供；既有草稿编码不变。
@@ -17,8 +21,9 @@ SDK 精确固定为已提交且可独立取得的
 模块包和后端 API 仍为 v1，后端行为没有随本次 Web 迁移改变。
 前端 context/返回声明必须是 API v2；不能仅凭宿主版本号或后端 API v1 推断支持。
 公共规则见宿主[模块 UI 指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md)。
-当前真实宿主提交、版本和导出输入只在
-[`tooling/host-sdk.json`](../tooling/host-sdk.json) 固定。前端直接使用其导出的权威类型。
+Frontend types come from the published SDK `/frontend` entry, backend contracts from
+`/backend`, and shared wire types from the root. Runtime-only constants use `/runtime`;
+this module currently needs no runtime SDK import.
 旧 Web 插口不保留兼容层，宿主与两个迁移模块须配套升级后冷启动；
 不能先运行新宿主却期待旧模块前端继续兼容。CI 不执行安装、部署或重启。
 已发行 0.1.6 的使用方法和兼容条件见其 tag 文档，不把本开发分支当成已发布资产。
@@ -30,7 +35,7 @@ is published, download `cockpit-file-0.2.4.tgz` and
 Before publication, an explicitly authorized joint deployment uses the unchanged
 successful CI archive for the exact merged main commit. An older package is not
 a substitute for this version, and a CI archive is not a published Release.
-Source code ZIP/tar 不是模块安装包。只有源码开发需要执行 SDK 准备和构建步骤。
+Source code ZIP/tar is not an installable module archive. Only source development needs the registry install and build steps below.
 
 安装前了解[复制标签页与删除的已知限制](release-notes.md#known-limitation)：
 本地删除资格不等于全局无引用，不要在一个标签页移除另一副本仍要发送或读取的附件。
@@ -43,23 +48,22 @@ Source code ZIP/tar 不是模块安装包。只有源码开发需要执行 SDK �
 - 模块代码与宿主同进程，必须可信；原生数据和认证由宿主/Copilot 管理。
 - 本次只支持本地 `.tgz` 安装，远程签名 URL 安装尚未实现。
 
-## 2. 导出宿主 SDK 并构建模块
+## 2. Authenticate and build from the registry
 
-构建固定使用 `tooling/host-sdk.json` 中的宿主提交，不跟随 moving main。
-在本仓库根准备独立源码目录（已经有该提交的干净 checkout 时可以跳过 clone）：
+The repository `.npmrc` sets only the `@waksana` registry. Configure authentication in
+your user npm configuration (never commit it), using an environment placeholder:
 
-```sh
-HOST_SHA="$(node --input-type=module -e "import { loadSdkPin } from './scripts/build-identity.mjs'; console.log((await loadSdkPin(process.cwd())).commit)")" &&
-git clone --no-checkout --depth 1 https://github.com/waksana/cockpit.git .host-sdk-source &&
-git -C .host-sdk-source fetch --no-tags --depth 1 origin "$HOST_SHA" &&
-git -C .host-sdk-source switch --detach FETCH_HEAD &&
-node scripts/sdk.mjs prepare .host-sdk-source
+```ini
+//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}
 ```
 
-准备脚本核对宿主提交和版本，再调用其类型导出器，生成 `.cockpit-sdk` 及来源记录。
-已有 SDK 仅在字节一致时复用；不一致会明确失败，不能混用类型。
-也可 `pnpm sdk:prepare /absolute/clean/pinned/host-source` 使用已有的干净固定源码。
-不要复制运行实例的 node_modules、原生 home 或凭据。
+Provide `NODE_AUTH_TOKEN` through the environment. GitHub Packages requires authentication
+even for public npm packages; a developer classic PAT needs `read:packages` and package access.
+Never print tokens, pass them as command arguments, or copy a running installation's
+dependencies, native home or credentials. CI uses `actions/setup-node` with
+`registry-url: https://npm.pkg.github.com`, `NODE_AUTH_TOKEN: ${{ github.token }}` and
+`packages: read`. The package must grant this consumer repository read access; a local PAT
+install does not prove Actions access. Do not fall back to npmjs or a local tarball.
 
 在 `cockpit-file` 仓库根执行：
 
@@ -72,7 +76,7 @@ pnpm package
 ```
 
 默认输出为 `module-output/cockpit-file-<version>.tgz` 及其 `.sha256`（不表示已发布）。
-当前源码已准备为新的补丁版本；打包安装仍须使用干净已提交源码，见上文集成状态。
+Current-source archives are validation artifacts, not a newly assigned installable release identity.
 
 输出目录必须不存在，也可以 `pnpm package /absolute/new/output` 指定新目录。
 打包要求干净的已提交源码；修改后先提交再重新 build，不能复用旧构建凭据。
@@ -80,8 +84,21 @@ pnpm package
 `dist/licenses/lucide.txt` 保留固定 Lucide 1.46.0 的完整 ISC 及 Feather/MIT 来源声明，
 运行时代码只包含实际使用的图标 SVG 节点，不包含整库/字体/CDN/React 依赖。
 React 与 portal 渲染器由宿主注入，
-后端运行代码只使用 Node 标准库。`.cockpit-sdk` 和开发依赖不随模块包交付。
+Backend runtime code uses only Node standard libraries. SDK declarations, host code,
+Zod, native implementations and development dependencies do not ship in the archive.
+The build receipt records the SDK name, exact version, registry tarball URL and
+SHA-512 integrity from the frozen lockfile and checks the installed package version.
+TypeScript 5.9.3 uses NodeNext with full declaration checking; Node types 25 and React
+types 19 match the SDK's supported ranges. Registry peer resolution may install React
+in the development tree; that is not a runtime import or permission to bundle it.
 正式 `.tgz` Release 的流程见[CI 与版本发行](releases.md)。
+
+CI builds and verifies the archive **before** checking out the pinned integration host.
+Only the real-host integration test needs host source: install that host's frozen
+dependencies and run `apps/server/src/module-file.integration.test.ts` with
+`COCKPIT_FILE_MODULE_ARCHIVE` pointing to the verified archive. Use isolated `HOME`,
+`COPILOT_HOME`, `COCKPIT_HOME`, synthetic sessions and dynamically allocated loopback
+ports, never a running production service or real native session.
 
 ## 3. 安装与启用
 

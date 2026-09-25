@@ -1,7 +1,6 @@
 node_modules/
 dist/
-.cockpit-sdk/
-.host-sdk-source/
+.host-integration/
 .module-build.json
 .fixtures/
 module-output/

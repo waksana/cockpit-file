@@ -6,7 +6,6 @@
     "moduleResolution": "NodeNext",
     "jsx": "react",
     "strict": true,
-    "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,
     "verbatimModuleSyntax": true,
     "allowImportingTsExtensions": true,

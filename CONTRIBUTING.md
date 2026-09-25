@@ -7,9 +7,9 @@ and generic host contracts in [Cockpit](https://github.com/waksana/cockpit).
 ## Local workflow
 
 Use Node **24.20.0** and pnpm **10.34.5**. Follow the
-[SDK preparation and build steps](docs/installation.md); `.cockpit-sdk` is generated
-from the exact host commit in `tooling/host-sdk.json`, not from moving main or
-another installation's dependencies.
+[registry authentication and build steps](docs/installation.md). The exact
+`@waksana/cockpit-module-sdk` package and integrity are locked in `pnpm-lock.yaml`;
+building needs no host checkout or generated SDK.
 
 Create a short branch from main. Run the smallest relevant existing tests, then
 the required checks for the proposed change:
@@ -23,7 +23,7 @@ pnpm build
 
 Packaging requires clean committed source and a matching build receipt; rebuild
 after committing, then use `pnpm package` and `pnpm verify:package ARCHIVE`.
-Do not commit generated SDKs, node_modules, dist, archives or local data.
+Do not commit credentials, node_modules, dist, archives or local data.
 
 ## Pull requests
 
@@ -39,13 +39,16 @@ real native homes, production services, credentials or personal files.
 Documentation-only changes need link/anchor and factual checks, not unrelated
 native experiments.
 
-## Changing the SDK pin
+## Changing the SDK dependency
 
-Update `tooling/host-sdk.json` deliberately to a reviewed immutable host commit
-and matching package/API version. Regenerate the SDK, update dependency metadata
-only when required, and exercise the final module archive with that host.
-The pin may refer to a not-yet-merged host change; disclose that dependency in
-installation and release notes rather than claiming the latest host release works.
+Verify publication and both developer and repository Actions access first.
+Update the exact version in `package.json` and regenerate the lockfile with pnpm
+against GitHub Packages. Never substitute a local tarball, generated declarations,
+peer-resolution bypass or `skipLibCheck`. SDK semver does not prove host compatibility:
+keep runtime API/capability checks and exercise the final archive against the
+immutable host in `tooling/host-integration.json`. That pin is an integration input,
+not a build dependency. Use the common, `/backend`, `/frontend` and `/runtime` public
+entries as appropriate; keep React supplied by `context.react`.
 
 ## Releases
 
