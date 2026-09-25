@@ -38,9 +38,10 @@ credentials are not a substitute. The host pin is only for integration tests, ne
 generation or module builds. Release verification installs frozen dependencies to parse
 the same lockfile but does not rebuild the downloaded artifact.
 
-The current SDK migration assigns no new File runtime version. Before any subsequent
-installation or publication, prepare a fresh coordinated version and release notes;
-do not publish changed migration bytes under the existing 0.2.4 identity.
+The current source assigns File 0.2.5 to the compatible SDK migration. Preserve
+the original successful main CI archive for any separately authorized joint
+deployment; do not publish changed bytes under the existing 0.2.4 identity.
+Version preparation and merge are not publication or deployment.
 
 ## 发行步骤
 

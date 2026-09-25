@@ -1,8 +1,8 @@
 # Cockpit File 文档
 
-**Current source contains an unreleased SDK-consumer migration on top of File 0.2.4.**
+**Current source prepares File 0.2.5 for the SDK-consumer migration.**
 The module ships [default instructions](../src/instructions.md) asking agents to give files as Markdown links/images.
-Package/manifest versions remain 0.2.4 for source work; changed bytes need a fresh coordinated release version before installation.
+Package/manifest versions agree at 0.2.5; changed bytes never replace an existing 0.2.4 installation.
 组件与浏览器离开保护见[前端接入契约](frontend-contract.md)。既有持久化草稿编码不变。
 
 前端使用 Web API v2、公共 UI v1 / shared-surfaces v1。尚未声明发布或部署。
