@@ -1,3 +1,18 @@
+# Cockpit File 0.2.5 (source preparation)
+
+Assigns a fresh immutable patch identity to the independently published SDK build
+migration merged in #53. Builds consume the exact
+`@waksana/cockpit-module-sdk@0.2.0` registry dependency and its unchanged lockfile
+integrity; no host checkout or generated SDK is needed. Build receipts retain the
+actual registry package identity.
+
+The separate integration host remains
+`7d69b6f348e17f098bc5562fdbec317e8e2e4ba6` in
+`tooling/host-integration.json`. API/capability gates, file behavior, persisted
+drafts and storage are unchanged; no migration is required. Preserve the original
+successful main CI archive, never replace installed 0.2.4 bytes. This preparation
+creates no tag, Release, installation, deployment or restart.
+
 # Cockpit File 0.2.4
 
 - Keep the upload control visible but disabled while a native ask, plan or MCP
