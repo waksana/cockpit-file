@@ -22,10 +22,13 @@ to each Cockpit session, telling agents to give files as Markdown links/images i
 
 ## 当前状态
 
-**当前为版本准备源码 0.2.4，配套 Cockpit 0.4.7（Web API v2、公共 UI v1）；宿主 0.3.0 会拒绝含 `instructions` 的 manifest。**
-manifest/package 标记 0.2.4；相对 0.2.3 的包内容已改变，须使用新的不可变版本身份，不能以 0.2.3 身份打包安装。
-SDK 固定为可取得的宿主提交 `13239911066ab8729a4453d5d2657f11611ce06f`；
-该提交提供公共协议与组件基础，不表示宿主 Release 已交付。
+**Current source contains an unreleased SDK-consumer migration on top of File 0.2.4.**
+Builds use the published `@waksana/cockpit-module-sdk@0.2.0` from GitHub Packages,
+without a host checkout. Package/manifest versions remain 0.2.4 for source work only;
+changed archives must receive a fresh coordinated version before installation or release.
+The exact integration host is recorded in [`tooling/host-integration.json`](tooling/host-integration.json).
+SDK semver does not replace Web API v2, public UI v1 or capability checks;
+hosts predating manifest `instructions` (including 0.3.0) reject the module.
 有任意草稿的未完成上传、失败选择或未加入草稿的上传结果时，浏览器离开确认保护刷新与关页；
 浏览器可能限制确认框，确认离开不保证恢复这些内存任务。
 仅有已持久化就绪附件时不提示。详见[离开页面保护](docs/frontend-contract.md#离开页面保护)。
@@ -40,7 +43,7 @@ Web 层采用注册 state 服务、
 原生问答使用独立草稿，普通 prompt 草稿及其文件保留，问题结束后恢复。
 前端入口要求 Web API v2、公共 UI v1、`uiSurfaceVersion: 1` 与 `context.createPortal`；
 旧 Web 插口不保留兼容层，不能只看宿主包版本号或后端 API v1 推断兼容。
-准确构建基线见 [`tooling/host-sdk.json`](tooling/host-sdk.json) 和[安装指南](docs/installation.md)。
+The exact build dependency is in `package.json` / `pnpm-lock.yaml`; see the [installation guide](docs/installation.md).
 公共样式、图标和兼容规则以宿主
 [模块 UI 开发指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md) 为唯一权威。
 宿主与模块需要配套发行和冷启动；合并源码或发布资产不代表安装、部署或重启授权。

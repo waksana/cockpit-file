@@ -1,4 +1,4 @@
-import type { MessageOrigin } from '@cockpit/module-api';
+import type { MessageOrigin } from '@waksana/cockpit-module-sdk/frontend';
 
 const opaqueId = /^f_[a-f0-9]{64}$/;
 const storedBody = /^body(?:\.[a-z0-9]{1,16})?$/;

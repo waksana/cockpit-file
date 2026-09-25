@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { lstat, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { parse } from 'yaml';
 
 export function git(root, args) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -15,14 +16,29 @@ export function sourceIdentity(root, strict = false) {
   return dirty ? null : sha;
 }
 
-export async function loadSdkPin(root) {
-  const pin = JSON.parse(await readFile(join(root, 'tooling/host-sdk.json'), 'utf8'));
-  if (pin.repository !== 'waksana/cockpit' || !/^[a-f0-9]{40}$/.test(pin.commit)
-    || !/^\d+\.\d+\.\d+$/.test(pin.version) || pin.apiVersion !== 1
-    || Object.keys(pin).sort().join(',') !== 'apiVersion,commit,repository,version') {
-    throw new Error('Invalid pinned host SDK identity');
+export async function lockedSdkIdentity(root) {
+  const name = '@waksana/cockpit-module-sdk';
+  const registry = 'https://npm.pkg.github.com';
+  const metadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  const version = metadata.devDependencies?.[name];
+  const lock = parse(await readFile(join(root, 'pnpm-lock.yaml'), 'utf8'));
+  const dependency = lock?.importers?.['.']?.devDependencies?.[name];
+  const resolution = lock?.packages?.[`${name}@${version}`]?.resolution;
+  if (typeof version !== 'string' || !/^\d+\.\d+\.\d+$/.test(version)
+    || lock?.lockfileVersion !== '9.0' || dependency?.specifier !== version
+    || typeof dependency?.version !== 'string'
+    || dependency.version.split('(')[0] !== version
+    || typeof resolution?.integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(resolution.integrity)
+    || typeof resolution?.tarball !== 'string') {
+    throw new Error('SDK must be an exact registry dependency with locked SHA-512 integrity');
   }
-  return pin;
+  const resolved = new URL(resolution.tarball);
+  if (resolved.origin !== registry || resolved.username || resolved.password || resolved.search || resolved.hash
+    || !resolved.pathname.startsWith(`/download/${name}/${version}/`)
+    || !/^[a-f0-9]{40}$/.test(resolved.pathname.split('/').at(-1))) {
+    throw new Error('SDK must resolve to the credential-free GitHub Packages tarball');
+  }
+  return { name, version, registry, resolved: resolved.href, integrity: resolution.integrity };
 }
 
 export async function inventory(root, roots) {
@@ -49,13 +65,12 @@ export const INSTRUCTIONS_LIMIT = 16 * 1024;
 export const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 export async function sdkIdentity(root) {
-  const pin = await loadSdkPin(root);
-  const saved = JSON.parse(await readFile(join(root, '.cockpit-sdk/pin.json'), 'utf8'));
-  const files = await inventory(join(root, '.cockpit-sdk'), ['module-api', 'protocol', 'LICENSE']);
-  if (!sameJson(saved.pin, pin) || !sameJson(saved.files, files)) {
-    throw new Error('Generated SDK differs from its pin; run the SDK preparation step');
+  const identity = await lockedSdkIdentity(root);
+  const installed = JSON.parse(await readFile(join(root, 'node_modules', identity.name, 'package.json'), 'utf8'));
+  if (installed.name !== identity.name || installed.version !== identity.version) {
+    throw new Error('Installed SDK differs from the locked package; run a frozen-lockfile install');
   }
-  return pin;
+  return identity;
 }
 
 export async function writeBuildReceipt(root, before) {

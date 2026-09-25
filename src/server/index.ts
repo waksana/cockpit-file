@@ -3,7 +3,7 @@ import { basename, isAbsolute, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type {
   ActivateBackend, ModuleBackendContext, ModuleRequest, ModuleResponse, NativeObservation,
-} from '@cockpit/module-api';
+} from '@waksana/cockpit-module-sdk/backend';
 import { decodeMessageReference, isLocalFileReference, managedFileUrl } from '../shared/files.ts';
 import { createFileStorage, FileStorageError, type FileLookup, type FileMetadata, type FileRange } from './storage.ts';
 import { createMarkdownScanner, type MarkdownReference, type MarkdownScanner } from './scanner.ts';

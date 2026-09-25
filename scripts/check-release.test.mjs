@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { stringify } from 'yaml';
 import { releaseFixture } from './test-support/release-fixture.mjs';
 import { packageModule } from './package.mjs';
 import { checkRelease, checkTagTarget } from './check-release.mjs';
@@ -15,8 +16,9 @@ test('release checks bind version, source, checksum and the pinned SDK', async t
   await assert.rejects(checkRelease(f.root, 'latest', f.sha, f.output));
   await assert.rejects(checkRelease(f.root, 'v0.2.0', f.sha, f.output));
   await assert.rejects(verifyPackage(f.root, archive, 'b'.repeat(40)));
-  await writeFile(join(f.root, 'tooling/host-sdk.json'), JSON.stringify({ ...f.pin, commit: 'b'.repeat(40) }));
-  await assert.rejects(verifyPackage(f.root, archive, f.sha), /different host SDK/);
+  f.lock.packages[`${f.pin.name}@${f.pin.version}`].resolution.integrity = `sha512-${Buffer.alloc(64, 1).toString('base64')}`;
+  await writeFile(join(f.root, 'pnpm-lock.yaml'), stringify(f.lock));
+  await assert.rejects(verifyPackage(f.root, archive, f.sha), /different SDK package/);
 });
 
 test('release refuses corrupted downloads and mismatched release notes', async t => {

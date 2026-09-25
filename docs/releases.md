@@ -10,7 +10,8 @@ cockpit-file-X.Y.Z.tgz.sha256
 ```
 
 `.tgz` 包含 `cockpit.module.json`、编译后的 `dist/`、LICENSE 和
-`module-build.json`。后者记录模块源 SHA、固定宿主 SDK 身份、Node/平台和文件清单；
+`module-build.json`. It records the module source SHA, SDK package name/version,
+registry URL, resolved tarball and SHA-512 integrity, Node/platform and file inventory;
 不包含用户数据。校验文件检测完整性，不是独立发布者签名。
 
 ## 检查链
@@ -19,21 +20,27 @@ PR、main push 和 Release 共用 `CI / Required checks`：
 
 ```text
 固定文件仓库 SHA
- -> 按 tooling/host-sdk.json checkout 固定宿主代码
- -> 导出并核对 SDK
- -> frozen install
+ -> authenticated GitHub Packages frozen-lockfile install (no host checkout)
  -> typecheck + tests
  -> build + 构建凭据
  -> 从同一干净提交打包
  -> 检查归档、摘要、来源和 SDK
+ -> checkout the exact tooling/host-integration.json host
  -> 用固定宿主实际安装并运行模块集成用例
  -> 保存该次原始 artifact
 ```
 
 检查使用只读权限、合成文件和会话事件，不需要生产凭据，不启动真实模型。
 Actions 固定完整提交 SHA；开发 artifact 保留 7 天，正式 Release 资产独立保留。
-SDK pin 不是 moving main；本体 PR 尚未合并时，模块 CI 仍使用明确的固定提交，
-发行说明必须诚实说明相应宿主要求。
+SDK version/integrity and host compatibility are separate inputs. CI uses the repository
+`GITHUB_TOKEN` with `packages: read` and must prove real package access; local developer
+credentials are not a substitute. The host pin is only for integration tests, never SDK
+generation or module builds. Release verification installs frozen dependencies to parse
+the same lockfile but does not rebuild the downloaded artifact.
+
+The current SDK migration assigns no new File runtime version. Before any subsequent
+installation or publication, prepare a fresh coordinated version and release notes;
+do not publish changed migration bytes under the existing 0.2.4 identity.
 
 ## 发行步骤
 

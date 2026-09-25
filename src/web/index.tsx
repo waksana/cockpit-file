@@ -1,7 +1,7 @@
 import type {
   ActivateFrontend, AttachmentProps,
   DraftReference, MarkdownNode, MarkdownRendererProps, ModuleFrontend,
-} from '@cockpit/module-api';
+} from '@waksana/cockpit-module-sdk/frontend';
 import type { ReactNode, SyntheticEvent } from 'react';
 import { isLocalFileReference, messageFileUrl, nativeFileUrl } from '../shared/files.ts';
 import { formatBytes, previewKind } from './file-state.ts';

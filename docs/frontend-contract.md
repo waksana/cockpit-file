@@ -3,8 +3,9 @@
 ## 入口与共享服务
 
 manifest 声明 `frontend.entry/styles`（`src/web/index.tsx` 与 `src/web/styles.css`）。
-当前为版本准备源码 0.2.4，配套宿主为 Cockpit **0.4.7**。
-SDK 固定为 `13239911066ab8729a4453d5d2657f11611ce06f`（包版本 0.4.4），不表示宿主 Release 已完成。
+Current source migrates File 0.2.4 to the published `@waksana/cockpit-module-sdk@0.2.0`.
+The exact integration host is recorded separately in `tooling/host-integration.json`;
+this source migration is not a release or deployment.
 
 `file-services.ts` 集中注册 FileDrafts、UploadStore、FileProbes、FileInputs 及其释放回调；
 其 context 类型为 `ModuleFrontendContext`，入口保留自己的兼容检查。
@@ -32,12 +33,11 @@ SDK 固定为 `13239911066ab8729a4453d5d2657f11611ce06f`（包版本 0.4.4），
 ## 呈现基线
 
 **前端入口继续使用 Web API v2、公共 UI v1 与独立 shared-surfaces v1；包/后端 API v1 不变。**
-精确配套宿主为 `13239911066ab8729a4453d5d2657f11611ce06f`（SDK 源码版本 0.4.4），
-不是已发布或部署的声明。激活在注册贡献前检查
+SDK semver is independent of host compatibility. Activation checks capabilities before registering contributions, including
 `context.uiSurfaceVersion === 1`；缺少或不支持时明确拒绝。
 预览原生 dialog 使用 `ck-surface ck-modal`，标题与动作使用 `ck-heading` / `ck-actions`。
 文件行、内联引用、媒体尺寸、portal、打开/关闭与焦点仍由原有模块代码负责。
-实际公共类型由 Cockpit 的 `packages/module-api` 提供，模块入口是 `activate(context)`。
+Public frontend types come from `@waksana/cockpit-module-sdk/frontend`; the entry remains `activate(context)`.
 前端 context 和返回声明均为 API v2，显式校验公共 UI v1 与 `context.createPortal`；
 公共 CSS/图标/兼容规范只在宿主
 [模块 UI 开发指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md) 维护。

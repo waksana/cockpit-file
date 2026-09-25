@@ -5,7 +5,7 @@ import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test, type TestContext } from 'node:test';
-import type { ModuleRequest, ModuleResponse, NativeObservation } from '@cockpit/module-api';
+import type { ModuleRequest, ModuleResponse, NativeObservation } from '@waksana/cockpit-module-sdk/backend';
 import { activate } from './index.ts';
 import { encodeMessageReference } from '../shared/files.ts';
 

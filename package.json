@@ -7,7 +7,6 @@
   "packageManager": "pnpm@10.34.5",
   "engines": { "node": "24.20.0" },
   "scripts": {
-    "sdk:prepare": "node scripts/sdk.mjs prepare",
     "build": "node scripts/build.mjs",
     "test": "node --experimental-strip-types --test \"src/**/*.test.ts\" scripts/*.test.mjs",
     "typecheck": "tsc --noEmit",
@@ -15,10 +14,11 @@
     "verify:package": "node scripts/verify-package.mjs"
   },
   "devDependencies": {
-    "@cockpit/module-api": "file:.cockpit-sdk/module-api",
     "@types/node": "25.9.5",
     "@types/react": "19.2.18",
+    "@waksana/cockpit-module-sdk": "0.2.0",
     "lucide-static": "1.46.0",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "yaml": "2.8.1"
   }
 }

@@ -1,7 +1,7 @@
 import type {
   ComposerTarget, DraftReference, DraftSchemaHandle, DraftSchemaRegistration, DraftSchemaScope,
   ModuleDraft, ModuleDraftSnapshot, ModuleStateRegistry, NativeAttachment,
-} from '@cockpit/module-api';
+} from '@waksana/cockpit-module-sdk/frontend';
 
 export const MAX_ATTACHMENTS = 20;
 type ReadonlyData<T> = { readonly [Key in keyof T]: ReadonlyData<T[Key]> };

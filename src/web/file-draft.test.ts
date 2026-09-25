@@ -3,7 +3,7 @@ import test from 'node:test';
 import type {
   DraftPurpose, DraftReference, DraftRestoreInput, DraftSchemaRegistration, DraftSchemaScope,
   DraftSubmission, ModuleDraft, ModuleDraftSnapshot, ModuleStateRegistry,
-} from '@cockpit/module-api';
+} from '@waksana/cockpit-module-sdk/frontend';
 import { fileDraftSchema, registerFileDrafts, validateFileState, validateNativeAttachment } from './file-draft.ts';
 import type { FileState } from './file-draft.ts';
 

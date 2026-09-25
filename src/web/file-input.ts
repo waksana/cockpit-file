@@ -1,4 +1,4 @@
-import type { ModuleFrontendContext } from '@cockpit/module-api';
+import type { ModuleFrontendContext } from '@waksana/cockpit-module-sdk/frontend';
 import type { ClipboardEvent, DragEvent } from 'react';
 import type { FileComposerContext } from './file-draft.ts';
 import type { UploadStore } from './file-state.ts';

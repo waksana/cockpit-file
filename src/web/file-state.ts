@@ -1,4 +1,4 @@
-import type { ModuleFrontendContext } from '@cockpit/module-api';
+import type { ModuleFrontendContext } from '@waksana/cockpit-module-sdk/frontend';
 import type { FileComposerContext, FileAttachment, FileDraft } from './file-draft.ts';
 import { MAX_ATTACHMENTS } from './file-draft.ts';
 import { fileRequestPath, managedFileUrl, nativeFileUrl } from '../shared/files.ts';
