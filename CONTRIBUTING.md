@@ -11,6 +11,10 @@ Use Node **24.20.0** and pnpm **10.34.5**. Follow the
 `@waksana/cockpit-module-sdk` package and integrity are locked in `pnpm-lock.yaml`;
 building needs no host checkout or generated SDK.
 
+For a new checkout/worktree, use that guide's
+[independent dependency setup](docs/installation.md#worktree-setup).
+Plain documentation changes need no dependency install or product build.
+
 Create a short branch from main. Run the smallest relevant existing tests, then
 the required checks for the proposed change:
 

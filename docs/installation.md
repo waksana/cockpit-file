@@ -50,6 +50,24 @@ Source code ZIP/tar is not an installable module archive. Only source developmen
 
 ## 2. Authenticate and build from the registry
 
+### Worktree setup
+
+A new checkout or worktree does not inherit ignored local files. When its
+dependencies are needed and not already prepared, follow the authenticated,
+frozen installation below in that worktree. Plain documentation edits do not
+require installing dependencies. Keep each worktree's `node_modules` and
+dependency graph independent; do not copy or symlink the whole directory from
+another worktree or a running installation.
+
+pnpm automatically reuses package files from its content-addressable store,
+using hard links or clones on compatible filesystems rather than sharing the
+mutable dependency directory. `pnpm store path` shows the selected store.
+Cache misses may still download packages, and crossing filesystems may require
+copies. Keep the existing store configuration and lockfile; no forced `--offline`
+mode or global virtual store is needed. See [pnpm's store explanation](https://pnpm.io/10.x/faq).
+
+### Registry authentication
+
 The repository `.npmrc` sets only the `@waksana` registry. Configure authentication in
 your user npm configuration (never commit it), using an environment placeholder:
 
