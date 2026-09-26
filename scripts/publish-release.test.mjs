@@ -22,6 +22,7 @@ function fixture({ releases = [release()], assets = files.map((_, index) => asse
   let sourceChecks = 0;
   const api = {
     listReleases: async () => structuredClone(releases),
+    getRelease: async id => structuredClone(releases.find(release => release.id === id)),
     resolveTarget: async () => sha,
     listAssets: async () => structuredClone(assets),
     download: async id => {
@@ -137,7 +138,7 @@ test('unexpected, duplicate, starter, wrong-size and corrupt assets fail closed'
 });
 
 test('read failures including HTTP 404, authorization, pagination and download errors never mean absence', async () => {
-  for (const method of ['listReleases', 'listAssets', 'download']) {
+  for (const method of ['listReleases', 'getRelease', 'listAssets', 'download']) {
     for (const message of ['HTTP 404', 'HTTP 403', 'pagination failed', 'timeout']) {
       const f = fixture();
       f.api[method] = async () => { throw new Error(message); };
@@ -178,6 +179,37 @@ test('acknowledged writes without confirmed remote readback stop instead of repe
     f.api[method] = async () => { calls++; return { id: 42 }; };
     await assert.rejects(publishRelease(f.options), /inspect.*remote|inspect the remote/i);
     assert.equal(calls, 1);
+  }
+});
+
+test('successful draft creation uses its authoritative ID when release discovery omits it', async () => {
+  const f = fixture({ releases: [], assets: [] });
+  f.api.listReleases = async () => [];
+  const reads = [];
+  const getRelease = f.api.getRelease;
+  f.api.getRelease = async id => { reads.push(id); return getRelease(id); };
+  assert.deepEqual(await publishRelease(f.options), { status: 'published', id: 42 });
+  assert.ok(reads.length > 1 && reads.every(id => id === 42));
+  assert.deepEqual(f.writes.map(write => write[0]), ['create', 'upload', 'upload', 'publish']);
+});
+
+test('known-ID verification rejects conflicting discovery, direct identity and unconfirmed read failures', async () => {
+  for (const change of [
+    f => { f.api.listReleases = async () => [{ ...release(), id: 99 }]; },
+    f => { f.api.listReleases = async () => [release(), { ...release(), id: 99 }]; },
+    f => { f.api.getRelease = async () => ({ ...release(), id: 99 }); },
+    f => { f.api.getRelease = async () => ({ ...release(), tag_name: 'v0.9.9' }); },
+    f => { f.api.getRelease = async () => { throw new Error('HTTP 404 read failure'); }; },
+  ]) {
+    const f = fixture({ releases: [], assets: [] });
+    const create = f.api.create;
+    f.api.create = async body => {
+      const result = await create(body);
+      change(f);
+      return result;
+    };
+    await assert.rejects(publishRelease(f.options), /identity changed|Multiple releases|tag changed|HTTP 404/);
+    assert.deepEqual(f.writes.map(write => write[0]), ['create']);
   }
 });
 
@@ -232,6 +264,9 @@ test('GitHub adapter paginates discovery and uses release/asset IDs, never the t
   assert.deepEqual(JSON.parse(calls[5].options.input), { draft: false, prerelease: false, make_latest: 'true' });
   assert.ok(calls[6].args.includes('repos/owner/repo/commits/release%2Fsource'));
   assert.ok(calls.every(call => !call.args.some(arg => arg.includes('/releases/tags/'))));
+  assert.deepEqual(await api.getRelease(42), { id: 42, sha: 'source' });
+  assert.ok(calls.at(-1).args.includes('repos/owner/repo/releases/42'));
+  assert.ok(calls.every(call => call.args.includes('Cache-Control: no-cache') && !call.args.includes('--cache')));
 });
 
 test('GitHub adapter does not turn failed or malformed pagination into an empty result', () => {

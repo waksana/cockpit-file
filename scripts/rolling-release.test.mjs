@@ -125,6 +125,7 @@ test('isolated archive has four assets, byte-identical descriptor, source-derive
   const api = {
     tagSha: () => sha,
     listReleases: () => structuredClone(releases),
+    getRelease: id => structuredClone(releases.find(release => release.id === id)),
     listAssets: () => structuredClone(assets),
     download: id => files.find(file => file.name === assets.find(asset => asset.id === id).name).bytes,
     create: body => { writes.push(body); releases.push({ ...body, id: 42 }); return { id: 42 }; },

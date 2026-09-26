@@ -76,6 +76,13 @@ assets, and refuses conflicting bytes or identity. A published complete release 
 read-only, including one subsequently promoted. Rebuilding changed source requires
 a new genuine PR merge and sequence, never a fallback release of the old identity.
 
+Release discovery remains paginated and rejects duplicate matching tags. After an
+ID is discovered or returned by successful creation, verification reads the release
+directly by ID with cache revalidation requested; a stale list omitting a newly
+created draft does not imply deletion. Conflicting listed IDs, a direct-ID failure,
+wrong tag/source or unconfirmed state still stop the attempt. No read failure
+causes a write retry.
+
 ## Explicit Milestone selection
 
 Run the **Milestone** workflow on `main` only after a user chooses one existing,
