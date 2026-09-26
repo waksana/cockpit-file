@@ -3,9 +3,9 @@
 ## 入口与共享服务
 
 manifest 声明 `frontend.entry/styles`（`src/web/index.tsx` 与 `src/web/styles.css`）。
-Current source prepares File 0.2.5 using the published `@waksana/cockpit-module-sdk@0.2.0`.
+Current source prepares File 0.2.6 using the published `@waksana/cockpit-module-sdk@0.2.0`.
 The exact integration host is recorded separately in `tooling/host-integration.json`;
-this source migration is not a release or deployment.
+this source preparation is not a release or deployment.
 
 `file-services.ts` 集中注册 FileDrafts、UploadStore、FileProbes、FileInputs 及其释放回调；
 其 context 类型为 `ModuleFrontendContext`，入口保留自己的兼容检查。

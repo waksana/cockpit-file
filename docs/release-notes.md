@@ -1,3 +1,21 @@
+# Cockpit File 0.2.6
+
+- Keep a persisted `SOURCE_NOT_FOUND` capture failure scoped to its file
+  reference instead of retaining it as a global module runtime error on every
+  page bootstrap. Permission, storage and other operational failures still
+  report explicitly.
+- Failed references remain unavailable with HTTP 422. The exact failed-state
+  and error-code headers identify a missing snapshot without treating unrelated
+  failures as missing source files. A manual retry only probes the saved state;
+  a new reply must provide a new reference to capture a file again.
+- Preserve old failure records and saved snapshots; do not recapture old
+  messages or clear data to hide errors. A normal cold host start replaces
+  an existing in-memory runtime error.
+
+This compatible patch retains the published SDK dependency and integration-host
+pin. There is no storage migration. The new archive must not replace any
+previously installed version; publication alone does not deploy it.
+
 # Cockpit File 0.2.5 (source preparation)
 
 Assigns a fresh immutable patch identity to the independently published SDK build
