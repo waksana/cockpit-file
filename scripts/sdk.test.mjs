@@ -87,7 +87,7 @@ test('CI builds from the registry before checking out the isolated integration h
   assert.equal(parse(release).jobs.checks.permissions.packages, 'read');
   assert.match(release, /needs: checks/);
   assert.match(release, /check-release\.mjs/);
-  assert.match(release, /gh release create/);
+  assert.match(release, /node scripts\/publish-release\.mjs/);
   assert.doesNotMatch(release, /pnpm (?:build|package)|--clobber|ssh |systemctl/);
   for (const workflow of [ci, release]) {
     for (const [, use] of workflow.matchAll(/uses:\s+([^\s]+)/g)) {
