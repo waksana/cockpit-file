@@ -23,7 +23,7 @@ export function githubApi(repository, run = execFileSync) {
   assert.match(repository, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/);
   const base = `repos/${repository}`;
   const request = (endpoint, args = [], input) => run('gh',
-    ['api', '--hostname', 'github.com', endpoint, ...args],
+    ['api', '--hostname', 'github.com', endpoint, '--header', 'Cache-Control: no-cache', ...args],
     { input, timeout: 60_000, maxBuffer: 34 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] });
   const json = (endpoint, args, input) => JSON.parse(request(endpoint, args, input).toString('utf8'));
   const list = endpoint => {
@@ -35,6 +35,7 @@ export function githubApi(repository, run = execFileSync) {
     ['--method', method, '--input', '-'], JSON.stringify(body));
   return {
     listReleases: () => list(`${base}/releases`),
+    getRelease: id => json(`${base}/releases/${checkId(id)}`),
     resolveTarget: target => json(`${base}/commits/${encodeURIComponent(target)}`).sha,
     listAssets: id => list(`${base}/releases/${checkId(id)}/assets`),
     download: id => request(`${base}/releases/assets/${checkId(id)}`, ['--header', 'Accept: application/octet-stream']),
@@ -73,13 +74,18 @@ export async function publishRelease({ tag, sha, files, notes, api, verifySource
       'Invalid release discovery response');
     const matches = releases.filter(release => release.tag_name === tag);
     assert.ok(matches.length <= 1, `Multiple releases match ${tag}; refusing ambiguous recovery`);
-    if (matches.length === 0) {
-      assert.equal(expectedId, undefined, 'Release disappeared after a write; inspect the remote state');
-      return null;
+    if (matches.length === 0 && expectedId === undefined) return null;
+    if (expectedId !== undefined && matches.length) {
+      assert.equal(matches[0].id, expectedId, 'Release identity changed');
     }
-    const release = matches[0];
+    // Lists may lag a successful write. Once known, the ID endpoint owns the
+    // release state; omission from discovery is not proof that it disappeared.
+    const knownId = expectedId ?? checkId(matches[0].id);
+    const release = await api.getRelease(knownId);
+    assert.ok(release, 'Release readback is missing; inspect the remote state');
     checkId(release.id);
-    if (expectedId !== undefined) assert.equal(release.id, expectedId, 'Release identity changed');
+    assert.equal(release.id, knownId, 'Release identity changed');
+    assert.equal(release.tag_name, tag, 'Release tag changed');
     assert.equal(typeof release.draft, 'boolean', 'Invalid release state');
     if (!rolling || release.draft) assert.equal(release.prerelease, rolling, 'Release channel conflicts');
     if (rolling) {
