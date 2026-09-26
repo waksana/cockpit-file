@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { stringify } from 'yaml';
+import { parse, stringify } from 'yaml';
 import { releaseFixture } from './test-support/release-fixture.mjs';
 import { packageModule } from './package.mjs';
 import { checkRelease, checkTagTarget } from './check-release.mjs';
@@ -42,10 +42,15 @@ test('lightweight and annotated remote tags must still identify the checked comm
 
 test('release keeps the verified archive hidden until remote assets pass verification', async () => {
   const workflow = await readFile(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
-  for (const text of ['uses: ./.github/workflows/build.yml', 'actions: read', 'check-release.mjs',
-    '--verify-tag --draft', 'gh release download', 'gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest']) {
-    assert.ok(workflow.includes(text), text);
-  }
-  assert.ok(workflow.indexOf('gh release download') < workflow.indexOf('gh release edit'));
-  assert.doesNotMatch(workflow, /--clobber|pnpm (?:build|package)|pull_request_target|secrets\./);
+  const parsed = parse(workflow);
+  assert.equal(parsed.jobs.checks.uses, './.github/workflows/build.yml');
+  assert.equal(parsed.jobs.publish.needs, 'checks');
+  assert.equal(parsed.jobs.publish.permissions.contents, 'write');
+  const commands = parsed.jobs.publish.steps.map(step => step.run).filter(Boolean);
+  assert.deepEqual(commands.filter(command => /release\.mjs/.test(command)), [
+    'node scripts/check-release.mjs "$RELEASE_TAG" "$GITHUB_SHA" release-artifact',
+    'node scripts/publish-release.mjs "$RELEASE_TAG" "$GITHUB_SHA" release-artifact',
+  ]);
+  assert.equal(parsed.jobs.publish.steps.at(-1).env.GH_TOKEN, '${{ github.token }}');
+  assert.doesNotMatch(workflow, /--clobber|pnpm (?:build|package)|pull_request_target|secrets\.|releases\/tags\/|gh release/);
 });
