@@ -245,6 +245,15 @@ HEAD ready 返回 200 和类型/长度；已知工作进行中返回 202；
 没有记录返回 404，前端在可能的事件先后差异下最多等待五秒。
 捕获明确失败返回 422，完整性问题等存储错误返回相应错误，不永久假装 loading。
 
+For a persisted missing-source failure, HEAD also returns
+`X-File-Error-Code: SOURCE_NOT_FOUND`; the affected card explains that no snapshot
+was saved, without reporting a module-wide runtime failure. Old failure records
+remain terminal and are not migrated or recaptured. Other failures still use their
+existing reporting paths. See [capture errors and module health](observation-and-loading.md#5-missing-sources-and-module-health)
+for the distinction between a new failed capture and an old host error replayed
+when the UI opens. Source changes do not alter the running installation or clear
+its existing in-memory error.
+
 遇到卡片失败，先区分旧消息未维护、源路径不存在、读取失败、大小上限和实际资源损坏。
 卡片“重试”只重新检查已有资源，不重新发送 prompt 或补抓旧文件。
 上传重试使用原操作身份；未确认结果不要换身份盲目重复创建。

@@ -447,7 +447,8 @@ export interface ProbeSnapshot {
   readonly mime?: string;
   readonly size?: number;
   readonly error?: string;
-  readonly failure?: { kind: 'timeout' } | { kind: 'network' } | { kind: 'http'; status: number };
+  readonly failure?: { kind: 'timeout' } | { kind: 'network' }
+    | { kind: 'http'; status: number; code?: 'SOURCE_NOT_FOUND' };
 }
 
 export interface ProbeClock {
@@ -588,6 +589,11 @@ export class FileProbes {
         };
         this.pause(entry);
         this.notify(entry);
+      } else if (response.status === 422 && response.headers.get('x-file-state') === 'failed'
+                 && response.headers.get('x-file-error-code') === 'SOURCE_NOT_FOUND') {
+        this.fail(entry,
+          'The source file was not found during capture, so no snapshot was saved. Once the file exists, ask the assistant to share it in a new message. Retrying only rechecks this saved result.',
+          { kind: 'http', status: 422, code: 'SOURCE_NOT_FOUND' });
       } else if ((response.status === 202 || response.status === 404) &&
                  response.headers.get('x-file-state') !== 'failed') {
         entry.nextAt = this.clock.now() + Math.min(150 * 2 ** entry.attempts++, 1_000);

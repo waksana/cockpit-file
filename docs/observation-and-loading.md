@@ -172,3 +172,35 @@ feed(delta)
   浏览器尚未发出的排队请求也可能耗尽五秒。不得宣称紧凑展示消除了该间歇性失败。
 - 卡片超时不自动取消其他消费者共享的后端捕获；后端工作需要自己的有界资源管理。
 - 等待文件不阻塞正文流，也不延长宿主 graceful。
+
+## 5. Missing sources and module health
+
+A local link can identify a source that does not exist when capture is attempted.
+If every permitted source candidate fails with `ENOENT` or `ENOTDIR`, storage saves
+a terminal `SOURCE_NOT_FOUND` result for that message/reference. It is not evidence
+that the module failed to activate or that another component deleted a file.
+
+This specific persisted failure stays on its file card rather than being sent to
+the host's module-wide `context.report` channel. GET still returns HTTP 422 with the
+stored error; HEAD returns 422, `X-File-State: failed` and
+`X-File-Error-Code: SOURCE_NOT_FOUND`. The probe uses that explicit combination,
+not English text or a generic 404, to explain that no snapshot was saved.
+Authorization errors, storage failures, corruption, failure-record persistence
+errors and other unexpected capture failures keep their existing reporting paths.
+
+There is no automatic retry of a terminal capture. Reopening the page, repeated
+deltas, historical completions and manual status checks cannot reopen its source.
+Once the source is available, the assistant must reference it in a new message to
+create a new capture identity. Already-saved snapshots remain available after
+their original source disappears. Older `SOURCE_NOT_FOUND` records, including
+those with the message `Cannot open capture source`, receive the same scoped
+feedback without deleting or rewriting their records.
+
+The observed host's [runtime-error map](https://github.com/waksana/cockpit/blob/ae6fa428ba7192ee2b82ee8b660685f1445a8d77/apps/server/src/module-host.ts#L112-L138)
+retains its latest module runtime error, and the
+[frontend bootstrap](https://github.com/waksana/cockpit/blob/ae6fa428ba7192ee2b82ee8b660685f1445a8d77/apps/web/src/lib/moduleRuntime.ts#L270-L281)
+reports it again on initialization. Repeated banners therefore do not prove new
+capture attempts. This source fix prevents new incorrect reports; it cannot clear
+an old report from an already-running host. A later authorized deployment/cold
+start is separate from source delivery and does not remove the saved per-reference
+failure. Do not delete file records or hide all module errors to clear a banner.

@@ -1110,6 +1110,53 @@ test('X-File-State failed makes otherwise retryable HTTP statuses fail immediate
   }
 });
 
+test('missing-source status is explicit, terminal and local to the affected probe', async () => {
+  const clock = new Clock();
+  const calls: RequestInit[] = [];
+  const probes = new FileProbes(async (_path, init) => {
+    calls.push(init!);
+    return new Response(null, {
+      status: 422, headers: { 'X-File-State': 'failed', 'X-File-Error-Code': 'SOURCE_NOT_FOUND' },
+    });
+  }, apiBase, clock);
+  const off = probes.subscribe(fileUrl, () => {});
+  await settle();
+  assert.equal(probes.snapshot(fileUrl).status, 'unavailable');
+  assert.deepEqual(probes.snapshot(fileUrl).failure, { kind: 'http', status: 422, code: 'SOURCE_NOT_FOUND' });
+  assert.match(probes.snapshot(fileUrl).error!, /source file was not found during capture, so no snapshot was saved/);
+  assert.match(probes.snapshot(fileUrl).error!, /new message\. Retrying only rechecks this saved result/);
+  assert.equal(clock.tasks.size, 0);
+  off();
+  probes.subscribe(fileUrl, () => {});
+  probes.setVisible(false);
+  probes.setVisible(true);
+  await clock.advance(10_000);
+  assert.equal(calls.length, 1, 'visibility and remount do not retry a terminal capture failure');
+  probes.retry(fileUrl);
+  await settle();
+  assert.equal(calls.length, 2);
+  assert.deepEqual(probes.snapshot(fileUrl).failure, { kind: 'http', status: 422, code: 'SOURCE_NOT_FOUND' });
+  assert.ok(calls.every(init => init.method === 'HEAD' && init.body === undefined));
+  assert.equal(clock.tasks.size, 0);
+  probes.dispose();
+});
+
+test('a missing-source marker never overrides authorization, storage or unclassified failures', async () => {
+  for (const [status, state, code] of [
+    [401, 'failed', 'SOURCE_NOT_FOUND'], [403, 'failed', 'SOURCE_NOT_FOUND'],
+    [500, 'failed', 'SOURCE_NOT_FOUND'], [422, 'failed', 'CORRUPT'], [422, 'missing', 'SOURCE_NOT_FOUND'],
+  ] as const) {
+    const probes = new FileProbes(async () => new Response(null, {
+      status, headers: { 'X-File-State': state, 'X-File-Error-Code': code },
+    }), apiBase, new Clock());
+    probes.subscribe(fileUrl, () => {});
+    await settle();
+    assert.deepEqual(probes.snapshot(fileUrl).failure, { kind: 'http', status });
+    assert.doesNotMatch(probes.snapshot(fileUrl).error!, /source file was not found/);
+    probes.dispose();
+  }
+});
+
 test('network errors preserve full details and require explicit retry to clear their failure', async () => {
   const clock = new Clock();
   const detail = `Connection lost: ${'diagnostic detail '.repeat(40)}`;

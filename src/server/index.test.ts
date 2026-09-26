@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm, readdir, stat } from 'node:fs/promises';
+import { promises as filesystem } from 'node:fs';
+import { mkdtemp, mkdir, readFile, writeFile, rm, readdir, stat } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { test, type TestContext } from 'node:test';
 import type { ModuleRequest, ModuleResponse, NativeObservation } from '@waksana/cockpit-module-sdk/backend';
 import { activate } from './index.ts';
+import { FileStorageError } from './storage.ts';
 import { encodeMessageReference } from '../shared/files.ts';
 
 async function fixture(t: TestContext, config: Record<string, unknown> = {}) {
@@ -15,13 +18,14 @@ async function fixture(t: TestContext, config: Record<string, unknown> = {}) {
   await mkdir(cwd);
   const controller = new AbortController();
   const errors: unknown[] = [];
-  const module = await activate({
+  const open = () => activate({
     apiVersion: 1, moduleId: 'cockpit-file', dataRoot: join(root, 'data'),
     serviceReadyVersion: 1, host: { call() { assert.fail('File does not call host intents'); } },
     apiBase: '/_modules/cockpit-file/fixed-digest/api', config, signal: controller.signal,
     report: error => { errors.push(error); },
     invalidate() {}, publish() { assert.fail('File does not publish module events'); },
   });
+  let module = await open();
   t.after(async () => {
     await module.dispose?.();
     controller.abort();
@@ -47,16 +51,27 @@ async function fixture(t: TestContext, config: Record<string, unknown> = {}) {
     encodeMessageReference({ sessionId: 'synthetic-session', messageId }, reference);
   const messageHead = (messageId: string, reference: string) =>
     request('HEAD', '/messages/*', { params: { '*': ref(messageId, reference) } });
-  const ready = async (read: () => Promise<ModuleResponse>) => {
+  const settled = async (read: () => Promise<ModuleResponse>) => {
     const end = Date.now() + 4000;
     let result = await read();
     while ((result.status === 202 || result.status === 404) && Date.now() < end) {
       await delay(5); result = await read();
     }
+    return result;
+  };
+  const ready = async (read: () => Promise<ModuleResponse>) => {
+    const result = await settled(read);
     assert.ok(result.status === undefined || result.status === 200, JSON.stringify(result));
     return result;
   };
-  return { root, cwd, module, request, event, ref, messageHead, ready, errors };
+  const reported = async () => {
+    const end = Date.now() + 4000;
+    while (!errors.length && Date.now() < end) await delay(5);
+    assert.ok(errors.length, 'Expected an operational capture error to reach the host');
+    return errors[0];
+  };
+  const reopen = async () => { await module.dispose?.(); module = await open(); };
+  return { root, cwd, get module() { return module; }, request, event, ref, messageHead, settled, ready, reported, reopen, errors };
 }
 
 test('module upload returns the native attachment and supports HEAD, exact downloads and ranges', async t => {
@@ -94,6 +109,124 @@ test('historical completions and resource reads cannot import a local file', asy
   assert.equal(response.status, 404);
   assert.deepEqual(await readdir(join(f.root, 'data', 'files')), []);
   assert.equal((await f.request('HEAD', '/messages/*', { params: { '*': 'invalid!' } })).status, 400);
+});
+
+test('missing sources remain explicit reference failures without global errors, recapture or record migration', async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.cwd, 'not-a-directory'), 'ordinary file');
+  for (const [id, reference] of [['missing', './missing.txt'], ['notdir', './not-a-directory/file.txt']] as const) {
+    await f.event('assistant.message_start', id);
+    await f.event('assistant.message_delta', id, { deltaContent: `[file](${reference})` });
+    const head = await f.settled(() => f.messageHead(id, reference));
+    assert.equal(head.status, 422);
+    assert.equal(head.headers?.['X-File-State'], 'failed');
+    assert.equal(head.headers?.['X-File-Error-Code'], 'SOURCE_NOT_FOUND');
+    assert.equal(head.body, undefined);
+    const result = await f.request('GET', '/messages/*', { params: { '*': f.ref(id, reference) } });
+    assert.deepEqual(result.body, {
+      code: 'SOURCE_NOT_FOUND', error: 'Capture source was not found; no file snapshot was saved',
+    });
+    await f.event('assistant.message', id, { content: `[file](${reference})` });
+  }
+  await f.reopen();
+  assert.deepEqual(f.errors, []);
+
+  const directory = join(f.root, 'data', 'files');
+  const ids = (await readdir(directory)).sort();
+  assert.equal(ids.length, 2);
+  const records: string[] = [];
+  for (const id of ids) {
+    const path = join(directory, id, 'state.json');
+    const state = JSON.parse(await readFile(path, 'utf8'));
+    state.error.message = 'Cannot open capture source';
+    const previousVersion = JSON.stringify(state);
+    await writeFile(path, previousVersion);
+    records.push(previousVersion);
+  }
+  await f.reopen();
+  await writeFile(join(f.cwd, 'missing.txt'), 'available after the first capture failed');
+  for (let i = 0; i < 3; i++) {
+    await f.event('assistant.message', 'missing', { content: '[file](./missing.txt)' });
+    const head = await f.messageHead('missing', './missing.txt');
+    assert.equal(head.status, 422);
+    assert.equal(head.headers?.['X-File-Error-Code'], 'SOURCE_NOT_FOUND');
+    const result = await f.request('GET', '/messages/*', { params: { '*': f.ref('missing', './missing.txt') } });
+    assert.deepEqual(result.body, { code: 'SOURCE_NOT_FOUND', error: 'Cannot open capture source' });
+  }
+  await f.event('assistant.message_start', 'missing');
+  await f.event('assistant.message_delta', 'missing', { deltaContent: '[duplicate](./missing.txt)' });
+  await f.reopen();
+  assert.deepEqual((await readdir(directory)).sort(), ids);
+  assert.deepEqual(await Promise.all(ids.map(id => readFile(join(directory, id, 'state.json'), 'utf8'))), records);
+  assert.equal((await f.messageHead('missing', './missing.txt')).status, 422);
+  await f.event('assistant.message_start', 'fresh');
+  await f.event('assistant.message_delta', 'fresh', { deltaContent: '[file](./missing.txt)' });
+  await f.ready(() => f.messageHead('fresh', './missing.txt'));
+  assert.deepEqual(f.errors, [], 'Only a new message may create a new capture; old failures never report module health');
+});
+
+test('capture permission, storage and failure-persistence errors still report to the host', async t => {
+  for (const code of ['SOURCE_UNREADABLE', 'IO_ERROR', 'STATE_UNCERTAIN'] as const) {
+    await t.test(code, async t => {
+      const f = await fixture(t);
+      const source = join(f.cwd, 'source.txt');
+      if (code !== 'STATE_UNCERTAIN') await writeFile(source, 'capture');
+      const originalOpen = filesystem.open;
+      const originalRename = filesystem.rename;
+      let sourceAttempted = false;
+      t.mock.method(filesystem, 'open', async (...args: Parameters<typeof originalOpen>) => {
+        if (args[0] === source) {
+          sourceAttempted = true;
+          if (code === 'SOURCE_UNREADABLE') throw Object.assign(new Error('Synthetic permission failure'), { code: 'EACCES' });
+        }
+        if (code === 'IO_ERROR' && String(args[0]).startsWith('/proc/self/fd/') && String(args[0]).endsWith('/body')) {
+          throw Object.assign(new Error('Synthetic storage full'), { code: 'ENOSPC' });
+        }
+        return originalOpen(...args);
+      });
+      t.mock.method(filesystem, 'rename', async (...args: Parameters<typeof originalRename>) => {
+        if (code === 'STATE_UNCERTAIN' && sourceAttempted && String(args[1]).endsWith('/state.json')) {
+          throw Object.assign(new Error('Synthetic failure-record write failure'), { code: 'ENOSPC' });
+        }
+        return originalRename(...args);
+      });
+      syncBuiltinESMExports();
+      t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+      await f.event('assistant.message_start', 'operational');
+      await f.event('assistant.message_delta', 'operational', { deltaContent: '[file](./source.txt)' });
+      const head = await f.settled(() => f.messageHead('operational', './source.txt'));
+      assert.equal(head.status, 422);
+      assert.equal(head.headers?.['X-File-Error-Code'], undefined);
+      const error = await f.reported();
+      await f.module.dispose?.();
+      assert.equal(f.errors.length, 1);
+      assert.ok(error instanceof FileStorageError);
+      assert.equal(error.code, code);
+    });
+  }
+});
+
+test('corrupt saved originals are not treated as missing capture sources', async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.cwd, 'source.txt'), 'original');
+  await f.event('assistant.message_start', 'saved');
+  await f.event('assistant.message_delta', 'saved', { deltaContent: '[file](./source.txt)' });
+  await f.ready(() => f.messageHead('saved', './source.txt'));
+  await f.event('assistant.message', 'saved', { content: '[file](./source.txt)' });
+  await f.reopen();
+  const [id] = await readdir(join(f.root, 'data', 'files'));
+  assert.ok(id);
+  await writeFile(join(f.root, 'data', 'files', id, 'ready', 'body.txt'), 'tampered snapshot');
+  await f.event('assistant.message_start', 'saved');
+  await f.event('assistant.message_delta', 'saved', { deltaContent: '[file](./source.txt)' });
+  const result = await f.request('GET', '/messages/*', { params: { '*': f.ref('saved', './source.txt') } });
+  assert.equal(result.status, 500);
+  assert.equal((result.body as { code: string }).code, 'CORRUPT');
+  const error = await f.reported();
+  await f.module.dispose?.();
+  assert.equal(f.errors.length, 1);
+  assert.ok(error instanceof FileStorageError);
+  assert.equal(error.code, 'CORRUPT');
 });
 
 test('SVG originals use image MIME with sandboxed resource headers and explicit downloads', async t => {

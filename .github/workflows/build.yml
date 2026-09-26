@@ -60,6 +60,7 @@ jobs:
       - name: Exercise the packaged module through the pinned host
         env:
           COCKPIT_FILE_MODULE_ARCHIVE: ${{ github.workspace }}/module-output/${{ steps.integration.outputs.archive }}
+          COCKPIT_HOST_SOURCE: ${{ github.workspace }}/.host-integration
           NODE_DISABLE_COMPILE_CACHE: '1'
           TSX_DISABLE_CACHE: '1'
         run: |
@@ -68,7 +69,9 @@ jobs:
           HOME="$RUNNER_TEMP/file-integration/home" \
           COPILOT_HOME="$RUNNER_TEMP/file-integration/copilot" \
           COCKPIT_HOME="$RUNNER_TEMP/file-integration/cockpit" \
-          timeout 300 node --import ./apps/server/node_modules/tsx/dist/loader.mjs --test apps/server/src/module-file.integration.test.ts
+          timeout 300 node --import ./apps/server/node_modules/tsx/dist/loader.mjs --test \
+            apps/server/src/module-file.integration.test.ts \
+            "$GITHUB_WORKSPACE/scripts/test-support/capture-feedback.integration.mjs"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: cockpit-file-${{ github.sha }}-linux-x64
