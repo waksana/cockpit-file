@@ -56,23 +56,14 @@ entries as appropriate; keep React supplied by `context.react`.
 
 ## Releases
 
-### Immutable installation versions
+Keep committed product versions at `0.0.0-dev`; do not prepare version-bump PRs,
+release tags or release labels. Every actual `main` PR merge automatically attempts
+an immutable Rolling Release for its exact merge SHA. PR-only authorization stops
+before merge and therefore before publication. Preserve historical release statements.
 
-Do not bump a version for every commit. Before packaging changed content for
-installation or deployment, compare with versions already delivered: changed
-package bytes require a fresh semantic version (normally the next patch for a
-compatible fix). The same module ID and version may only reproduce the same
-bytes/digest. A source SHA or digest records provenance; neither replaces the
-module version or permits replacing an installed identity.
-
-Synchronize `package.json`, `cockpit.module.json`, any embedded versions and
-applicable lockfile metadata, then update current-source compatibility and release
-notes. Preserve historical release statements. Rebuild from the final clean commit
-and verify its exact CI artifact. Never delete installed directories or force an
-installer bypass to reuse a version. Version preparation and merge do not authorize
-tags, Releases, installation or restart.
-
-The [release guide](docs/releases.md) owns version tags and the exact `.tgz`
-artifact. No npm publication, deployment or service restart is performed by CI.
+The [release guide](docs/releases.md) owns generated versions, four verified assets,
+single-attempt recovery and explicit in-place Milestone promotion. Never replace an
+installed ID/version with different bytes or bypass installer identity checks.
+No npm publication, deployment or service restart is performed by CI.
 Contributions are licensed under [GPL-3.0-only](LICENSE).
 Report vulnerabilities through the [private security channel](SECURITY.md).

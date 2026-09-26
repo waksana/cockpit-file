@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -8,6 +9,14 @@ import { checkRelease, checkReleaseSource } from './check-release.mjs';
 function checkId(id) {
   assert.ok(Number.isSafeInteger(id) && id > 0, 'Invalid GitHub object ID');
   return id;
+}
+
+export const sealMarker = '\n<!-- cockpit-rolling-assets-v1 -->\n';
+export function assetSeal(assets, files) {
+  return JSON.stringify(assets.map(asset => ({
+    id: asset.id, name: asset.name, size: asset.size,
+    sha256: createHash('sha256').update(files.find(file => file.name === asset.name).bytes).digest('hex'),
+  })).sort((a, b) => a.name.localeCompare(b.name))) + '\n';
 }
 
 export function githubApi(repository, run = execFileSync) {
@@ -48,10 +57,13 @@ async function writeOnce(label, action) {
 }
 
 export async function publishRelease({ tag, sha, files, notes, api, verifySource }) {
-  assert.match(tag, /^v\d+\.\d+\.\d+$/);
+  const rolling = /^v0\.0\.0-rolling\.[1-9]\d*$/.test(tag);
+  assert.match(tag, /^v\d+\.\d+\.\d+(?:-rolling\.[1-9]\d*)?$/);
   assert.match(sha, /^[a-f0-9]{40}$/);
   const archive = `cockpit-file-${tag.slice(1)}.tgz`;
-  assert.deepEqual(files.map(file => file.name).sort(), [archive, `${archive}.sha256`]);
+  assert.deepEqual(files.map(file => file.name).sort(), [
+    ...(rolling ? ['cockpit-deployment.json', 'cockpit-deployment.json.sha256'] : []), archive, `${archive}.sha256`,
+  ].sort());
   assert.ok(files.every(file => Buffer.isBuffer(file.bytes) && file.bytes.length > 0));
   assert.equal(notes.split(/\r?\n/)[0], `# Cockpit File ${tag.slice(1)}`);
 
@@ -69,7 +81,11 @@ export async function publishRelease({ tag, sha, files, notes, api, verifySource
     checkId(release.id);
     if (expectedId !== undefined) assert.equal(release.id, expectedId, 'Release identity changed');
     assert.equal(typeof release.draft, 'boolean', 'Invalid release state');
-    assert.equal(release.prerelease, false, 'Prerelease conflicts with a stable release');
+    if (!rolling || release.draft) assert.equal(release.prerelease, rolling, 'Release channel conflicts');
+    if (rolling) {
+      assert.equal(release.name, `Cockpit File ${tag}`, 'Release title changed');
+      if (release.draft) assert.equal(release.body, notes, 'Release notes changed');
+    }
     assert.ok(typeof release.target_commitish === 'string' && release.target_commitish.length > 0,
       'Release source is missing');
     const target = release.target_commitish;
@@ -93,7 +109,10 @@ export async function publishRelease({ tag, sha, files, notes, api, verifySource
     }
     const missing = files.filter(file => !seen.has(file.name));
     if (!release.draft) assert.equal(missing.length, 0, 'Published release is incomplete; refusing changes');
-    return { release, missing };
+    if (rolling && !release.draft) {
+      assert.equal(release.body, notes + sealMarker + assetSeal(assets, files), 'Published asset identity or notes changed');
+    }
+    return { release, missing, assets };
   };
 
   await verifySource();
@@ -104,8 +123,9 @@ export async function publishRelease({ tag, sha, files, notes, api, verifySource
     state = await inspect();
     if (!state) {
       const created = await writeOnce('Draft creation', () => api.create({
-        tag_name: tag, target_commitish: sha, draft: true, prerelease: false,
-        name: `Cockpit File ${tag}`, body: notes, generate_release_notes: true,
+        tag_name: tag, target_commitish: sha, draft: true, prerelease: rolling,
+        name: `Cockpit File ${tag}`, body: notes, generate_release_notes: !rolling,
+        ...(rolling ? { make_latest: 'false' } : {}),
       }));
       assert.ok(created && Number.isSafeInteger(created.id) && created.id > 0,
         'Draft creation returned an unknown identity; inspect remote state before any rerun');
@@ -128,7 +148,8 @@ export async function publishRelease({ tag, sha, files, notes, api, verifySource
   state = await inspect(id);
   if (!state.release.draft) return { status: 'already_published', id };
   assert.equal(state.missing.length, 0, 'Draft is incomplete');
-  await writeOnce('Draft publication', () => api.publish(id));
+  await writeOnce('Draft publication', () => api.publish(id,
+    rolling ? notes + sealMarker + assetSeal(state.assets, files) : undefined));
   state = await inspect(id);
   assert.equal(state.release.draft, false, 'Publication is not confirmed; inspect remote state before any rerun');
   await verifySource();

@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { lstat, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse } from 'yaml';
+import { buildIdentity } from './rolling-identity.mjs';
 
 export function git(root, args) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -80,7 +81,7 @@ export async function writeBuildReceipt(root, before) {
   const expectedNode = (await readFile(join(root, '.node-version'), 'utf8')).trim();
   if (process.versions.node !== expectedNode) throw new Error(`Build requires Node ${expectedNode}`);
   const receipt = {
-    format: 1, product: 'cockpit-file', version: metadata.version, sourceSha,
+    format: 1, product: 'cockpit-file', version: (await buildIdentity(root)).version, sourceSha,
     sdk: await sdkIdentity(root), node: process.versions.node, platform: process.platform, arch: process.arch,
     files: await inventory(root, ['cockpit.module.json', 'dist', 'LICENSE']),
   };
@@ -98,7 +99,7 @@ export async function checkedBuild(root) {
   const pin = await sdkIdentity(root);
   const metadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
   if (receipt.format !== 1 || receipt.product !== 'cockpit-file' || receipt.sourceSha !== sourceSha
-    || receipt.version !== metadata.version || receipt.node !== process.versions.node
+    || receipt.version !== (await buildIdentity(root)).version || receipt.node !== process.versions.node
     || receipt.platform !== process.platform || receipt.arch !== process.arch || !sameJson(receipt.sdk, pin)
     || !sameJson(receipt.files, await inventory(root, ['cockpit.module.json', 'dist', 'LICENSE']))) {
     throw new Error('Build output is stale or modified; rebuild the clean committed source');

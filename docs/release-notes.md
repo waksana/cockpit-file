@@ -1,3 +1,15 @@
+# Cockpit File 0.0.0-dev
+
+- Every merged main PR now independently attempts its exact-SHA Rolling Release.
+  Versions are injected only into isolated build/package output; source stays dev.
+- Publish four verified assets with a source-derived format-2 deployment descriptor.
+  Explicit Milestone promotion edits only the existing Release's channel/Latest.
+- Runtime development identity is `dev+<shortSHA>`. Existing file snapshots, draft
+  data, SDK dependency and integration-host pin are unchanged; no migration occurs.
+
+See [the release guide](releases.md). Historical release statements below describe
+their original delivery model, not the new Rolling workflow.
+
 # Cockpit File 0.2.6
 
 - Keep a persisted `SOURCE_NOT_FOUND` capture failure scoped to its file

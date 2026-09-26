@@ -5,6 +5,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { basename, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { git, INSTRUCTIONS_LIMIT, lockedSdkIdentity, sameJson } from './build-identity.mjs';
+import { buildIdentity, deploymentDescriptor } from './rolling-identity.mjs';
 
 export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-parse', 'HEAD'])) {
   assert.match(sourceSha, /^[a-f0-9]{40}$/);
@@ -19,9 +20,11 @@ export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-p
   const build = JSON.parse(read('module-build.json').toString('utf8'));
   const expectedManifest = JSON.parse(await readFile(join(root, 'cockpit.module.json'), 'utf8'));
   const metadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  const identity = await buildIdentity(root);
+  expectedManifest.version = identity.version;
   assert.ok(sameJson(manifest, expectedManifest), 'Archive manifest differs from this source');
   assert.equal(manifest.id, 'cockpit-file');
-  assert.equal(manifest.version, metadata.version);
+  assert.equal(manifest.version, identity.version);
   assert.equal(basename(archive), `${manifest.id}-${manifest.version}.tgz`);
   assert.equal(build.format, 1);
   assert.equal(build.product, manifest.id);
@@ -36,7 +39,8 @@ export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-p
   const expected = new Set(['module-build.json']);
   for (const file of build.files) {
     assert.equal(typeof file.path, 'string');
-    assert.ok(file.path === 'cockpit.module.json' || file.path === 'LICENSE' || file.path.startsWith('dist/'));
+    assert.ok(file.path === 'cockpit.module.json' || file.path === 'LICENSE' || file.path.startsWith('dist/')
+      || (identity.sequence && file.path === 'cockpit-deployment.json'));
     assert.ok(!/[\\\x00-\x1f]/.test(file.path) && file.path.split('/').every(part => part && part !== '.' && part !== '..'));
     assert.ok(!/\.test\.|\.spec\.|node_modules|\.cockpit-sdk/.test(file.path));
     assert.ok(!expected.has(file.path), 'Duplicate file inventory entry');
@@ -52,6 +56,14 @@ export async function verifyPackage(root, archive, sourceSha = git(root, ['rev-p
   }
   for (const name of names) if (!name.endsWith('/')) assert.ok(expected.delete(name), `Unexpected package file: ${name}`);
   assert.equal(expected.size, 0, 'An inventoried file is missing');
+  if (identity.sequence) {
+    const descriptor = read('cockpit-deployment.json');
+    assert.deepEqual(JSON.parse(descriptor), await deploymentDescriptor(root, identity));
+    const directory = resolve(archive, '..');
+    assert.ok(descriptor.equals(await readFile(join(directory, 'cockpit-deployment.json'))));
+    assert.equal(await readFile(join(directory, 'cockpit-deployment.json.sha256'), 'utf8'),
+      `${createHash('sha256').update(descriptor).digest('hex')}  cockpit-deployment.json\n`);
+  }
   return { version: manifest.version, sourceSha, sha256, sdk: build.sdk, files: build.files.length };
 }
 

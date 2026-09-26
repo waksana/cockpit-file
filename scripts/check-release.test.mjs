@@ -48,9 +48,8 @@ test('release keeps the verified archive hidden until remote assets pass verific
   assert.equal(parsed.jobs.publish.permissions.contents, 'write');
   const commands = parsed.jobs.publish.steps.map(step => step.run).filter(Boolean);
   assert.deepEqual(commands.filter(command => /release\.mjs/.test(command)), [
-    'node scripts/check-release.mjs "$RELEASE_TAG" "$GITHUB_SHA" release-artifact',
-    'node scripts/publish-release.mjs "$RELEASE_TAG" "$GITHUB_SHA" release-artifact',
+    'node scripts/rolling-release.mjs publish release-artifact',
   ]);
   assert.equal(parsed.jobs.publish.steps.at(-1).env.GH_TOKEN, '${{ github.token }}');
-  assert.doesNotMatch(workflow, /--clobber|pnpm (?:build|package)|pull_request_target|secrets\.|releases\/tags\/|gh release/);
+  assert.doesNotMatch(workflow, /--clobber|pnpm (?:build|package)|secrets\.|releases\/tags\/|gh release/);
 });
