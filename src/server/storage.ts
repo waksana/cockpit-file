@@ -593,7 +593,7 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
               selected = true;
             } finally { if (!selected) await candidate.close(); }
           }
-          if (!source || !initial) throw failure('SOURCE_NOT_FOUND', 'Cannot open capture source');
+          if (!source || !initial) throw failure('SOURCE_NOT_FOUND', 'Capture source was not found; no file snapshot was saved');
           if (initial.size > BigInt(maxBytes)) throw failure('LIMIT_EXCEEDED', `File exceeds the ${maxBytes}-byte limit`);
           sourceInput = sourceBytes(source);
         } else sourceInput = input;

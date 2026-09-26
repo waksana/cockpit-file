@@ -330,8 +330,9 @@ export const activate: ActivateFrontend = context => {
     const bytes = state.size ?? size;
     const checkErrorLabel = state.failure?.kind === 'timeout' ? '检查超时'
       : state.failure?.kind === 'network' ? '请求失败'
-        : state.failure?.kind === 'http' && [401, 403].includes(state.failure.status) ? '无访问权限'
-          : state.failure?.kind === 'http' && state.failure.status === 422 ? '捕获失败' : '检查失败';
+        : state.failure?.kind === 'http' && state.failure.code === 'SOURCE_NOT_FOUND' ? '源文件不存在'
+          : state.failure?.kind === 'http' && [401, 403].includes(state.failure.status) ? '无访问权限'
+            : state.failure?.kind === 'http' && state.failure.status === 422 ? '捕获失败' : '检查失败';
     return <FileTile name={name} identity={url} href={url} inline={inline} busy={busy ?? loading}
       status={status || (loading ? '检查中' : undefined)}
       size={bytes} metadata={bytes === undefined ? state.mime : undefined}

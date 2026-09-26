@@ -72,6 +72,9 @@ test('CI builds from the registry before checking out the isolated integration h
   assert.doesNotMatch(ci, /sdk\.mjs|\.cockpit-sdk|\.host-sdk-source/);
   assert.match(ci, /verify-package\.mjs/);
   assert.match(ci, /module-file\.integration\.test\.ts/);
+  const integration = steps.find(step => step.name === 'Exercise the packaged module through the pinned host');
+  assert.equal(integration.env.COCKPIT_HOST_SOURCE, '${{ github.workspace }}/.host-integration');
+  assert.match(integration.run, /capture-feedback\.integration\.mjs/);
   assert.match(ci, /retention-days: 7/);
   assert.doesNotMatch(ci, /contents: write|pull_request_target|secrets\./);
   assert.equal(workflow.permissions.packages, 'read');

@@ -1646,6 +1646,37 @@ test('inline errors retain one link and expose the complete cause and retry only
   h.unmount(); frontend.dispose?.();
 });
 
+test('missing-source details stay on the affected reference without reporting module failure or fetching bytes', async () => {
+  const h = harness();
+  h.context.request = async (path, init) => {
+    h.calls.push({ path, init });
+    return new Response(null, {
+      status: 422, headers: { 'X-File-State': 'failed', 'X-File-Error-Code': 'SOURCE_NOT_FOUND' },
+    });
+  };
+  const frontend = await activate(h.context);
+  const node: MarkdownNode = { kind: 'link', origin: { sessionId: 'fixture', messageId: 'missing-source' },
+    target: './missing.txt', label: 'Missing file' };
+  const render = () => h.render(frontend.markdown![0]!.component, { node, fallback: 'safe fallback' });
+  render(); h.flushEffects(); await settle();
+  let tree = render();
+  const trigger = descendants(tree).find(element => element.props['aria-haspopup'] === 'dialog')!;
+  assert.match(String(trigger.props['aria-description']), /source file was not found during capture/);
+  openFile(tree);
+  tree = render();
+  const dialog = descendants(tree).find(element => element.type === 'dialog')!;
+  assert.match(textContent(dialog), /no snapshot was saved/);
+  assert.match(textContent(dialog), /new message\. Retrying only rechecks this saved result/);
+  assert.equal(descendants(dialog).some(element => ['a', 'img', 'video', 'audio'].includes(String(element.type))), false);
+  const retry = descendants(dialog).find(element => element.props.className === 'cf-dialog-retry')!;
+  click(descendants(retry).find(element => element.type === 'button')!);
+  await settle();
+  assert.equal(h.calls.length, 2);
+  assert.ok(h.calls.every(call => call.init?.method === 'HEAD'));
+  assert.deepEqual(h.errors, []);
+  h.unmount(); frontend.dispose?.();
+});
+
 test('retry hands focus to the persistent close control before replacing its own modal action', async () => {
   const h = harness();
   h.context.request = async () => new Response(null, { status: 503 });

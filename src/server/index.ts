@@ -134,7 +134,10 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
     if (captures.has(captureKey)) return;
     captures.add(captureKey);
     void work.run(() => storage.capture(keyOf(state.sessionId, state.messageId), target, paths, context.signal))
-      .catch(report).finally(() => { captures.delete(captureKey); });
+      .catch(error => {
+        // Missing sources already have a terminal per-reference failure, exposed by GET/HEAD.
+        if (!(error instanceof FileStorageError) || error.code !== 'SOURCE_NOT_FOUND') report(error);
+      }).finally(() => { captures.delete(captureKey); });
   };
   const capture = (state: MessageState, references: MarkdownReference[]) => {
     for (const { target } of references) {
@@ -253,6 +256,7 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
       } };
       if (result.state === 'failed') return { status: 422, headers: {
         'Cache-Control': 'no-store', 'X-File-State': 'failed',
+        ...(result.error.code === 'SOURCE_NOT_FOUND' ? { 'X-File-Error-Code': 'SOURCE_NOT_FOUND' } : {}),
       }, body: head ? undefined : { code: result.error.code, error: result.error.message } };
       const headers = fileHeaders(result.file, request.query.download === '1');
       if (head) return { headers };
