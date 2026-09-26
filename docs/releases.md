@@ -73,6 +73,52 @@ build receipt 与当前源码、SDK 和 dist 文件一致。提交后必须重�
 确认不一致时停下并查明原因，不能把“调用报错”当成“远端肯定没有发布”。
 此流程不承诺自动处理所有部分失败，也不执行部署、重启或用户数据迁移。
 
+### Exact-tag draft recovery
+
+`scripts/publish-release.mjs` discovers releases through the authenticated,
+fully paginated `GET /repos/{owner}/{repo}/releases` list and matches `tag_name`
+exactly. The published-release-by-tag endpoint is **not** a draft lookup; its
+404 does not prove that no draft exists. The workflow token needs `contents: write`
+to see and manage drafts. Discovery/authentication/pagination failures stop the
+workflow without creating anything.
+
+| Observed state | Workflow action |
+| --- | --- |
+| No exact-tag release after successful discovery | Create one draft bound to the full checked source SHA, then rediscover its returned ID. |
+| One matching draft | Check its source and every existing asset by ID; upload only missing expected assets, then read back their bytes. |
+| One identical, complete published release | Report `already_published`; no writes, including no Latest change. |
+| Multiple exact-tag releases, conflicting source/state or unexpected/duplicate/incomplete/corrupt assets | Stop; do not select one, delete anything or replace an asset. |
+| Failed write or unconfirmed readback | Stop with the outcome unconfirmed; no automatic write retry or cleanup. |
+
+Before publication, the local archive must pass the existing package, manifest,
+version, notes, source SHA, SDK integrity, Node and file-inventory checks. Remote
+archive **and checksum bytes** must equal that exact checked CI artifact; names,
+sizes or metadata alone are insufficient. The checkout and remote (lightweight
+or peeled annotated) tag must still identify the accepted mainline commit.
+New drafts record `target_commitish` as its full SHA. A legacy draft recording a
+ref such as `main` is recoverable only while that ref still resolves to the same
+SHA; a moved or unresolvable ref is a conflict, not permission to retarget it.
+
+Release discovery and asset verification run again before each upload and before
+the single publish-by-ID PATCH (`draft: false`, `prerelease: false`,
+`make_latest: true`), followed by published-state/asset readback. An empty or
+partial draft is recoverable only when all present assets are complete and
+byte-identical. A GitHub `starter` asset or mismatched bytes requires investigation.
+No path overwrites assets, moves/creates a tag, rebuilds an archive or modifies the
+independent SDK publication chain.
+
+After a timeout/cancellation, inspect the paginated release list, selected release
+ID and its asset list before explicitly rerunning the workflow. A failed create,
+upload or publish may already have applied; a later recovery starts with fresh
+reads rather than replaying that request. Preserve the original checked artifact:
+different bytes from a rerun are a conflict, not a replacement candidate.
+GitHub does not provide an atomic compare-and-publish operation across these
+reads; workflow concurrency serializes this workflow per tag, not manual/API
+writers. Do not edit a release concurrently. Recovery code merged later does not
+retroactively change workflows/scripts at an old tag; never move that tag to pick
+up the fix. An old-tag recovery needs a separately authorized procedure using the
+original source/artifact and reviewed recovery code.
+
 <a id="atomic-release-publication"></a>
 正式、非 draft、非 prerelease 且资产完整的 Release 才是发布就绪信号。workflow
 在远端资产回读和复验前保持 draft；部分上传或失败的 draft 留作诊断，不得被自动
