@@ -51,13 +51,52 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: node scripts/check-release.mjs "$RELEASE_TAG" "$GITHUB_SHA" release-artifact
-      - name: Publish the checked tgz
+      - name: Stage and verify the checked tgz
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           ARCHIVE="release-artifact/cockpit-file-${RELEASE_TAG#v}.tgz"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            >existing-release.json 2>release-lookup.err; then
+            echo "Release $RELEASE_TAG already exists; refusing to replace it." >&2
+            exit 1
+          elif ! grep -Fq 'HTTP 404' release-lookup.err; then
+            cat release-lookup.err >&2
+            echo "Could not prove that $RELEASE_TAG is unused." >&2
+            exit 1
+          fi
+
           gh release create "$RELEASE_TAG" \
             "$ARCHIVE" "$ARCHIVE.sha256" \
-            --verify-tag --latest --title "Cockpit File $RELEASE_TAG" \
+            --verify-tag --draft --title "Cockpit File $RELEASE_TAG" \
             --notes-file docs/release-notes.md --generate-notes
+
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" >draft-release.json
+          jq -e --arg tag "$RELEASE_TAG" --arg archive "${ARCHIVE##*/}" '
+            .tag_name == $tag and .draft == true and .prerelease == false and
+            ([.assets[].name] | sort) ==
+              ([$archive, ($archive + ".sha256")] | sort) and
+            all(.assets[]; .size > 0)
+          ' draft-release.json
+
+          mkdir published-artifact
+          gh release download "$RELEASE_TAG" --dir published-artifact \
+            --pattern "${ARCHIVE##*/}" --pattern "${ARCHIVE##*/}.sha256"
+          node scripts/check-release.mjs \
+            "$RELEASE_TAG" "$GITHUB_SHA" published-artifact
+
+      - name: Publish the complete draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          ARCHIVE="cockpit-file-${RELEASE_TAG#v}.tgz"
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" >published-release.json
+          jq -e --arg tag "$RELEASE_TAG" --arg archive "$ARCHIVE" '
+            .tag_name == $tag and .draft == false and .prerelease == false and
+            ([.assets[].name] | sort) ==
+              ([$archive, ($archive + ".sha256")] | sort) and
+            all(.assets[]; .size > 0)
+          ' published-release.json
