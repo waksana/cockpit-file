@@ -50,7 +50,9 @@ Version preparation and merge are not publication or deployment.
 3. 创建指向该完整 SHA 的 `vX.Y.Z` tag 并推送。
 4. Release workflow 在该 tag 上复用同一检查，下载同次已验证 artifact。
 5. 发布前再次核对 tag/version/来源/SDK/Node/文件摘要，以及远端 tag 仍指向同一提交。
-6. 发布原始 `.tgz` 和 checksum，不在 publish job 重新构建。
+6. 把原始 `.tgz` 和 checksum 暂存到 draft，重新下载并复验远端资产；仅在两项资产
+   完整且身份一致后，将 draft 一次性转成正式、非 prerelease 的 Latest Release。
+   publish job 不重新构建。
 
 版本 tag 不允许更新或删除。已发布资产不自动覆盖；源代码修复应使用新版本。
 本次配置不自动创建首个 tag 或 Release，也不合并 Cockpit 本体的 PR。
@@ -70,3 +72,9 @@ build receipt 与当前源码、SDK 和 dist 文件一致。提交后必须重�
 已有 Release 的重跑不会自动覆盖；不要移动 tag、盲删 Release 或使用 clobber。
 确认不一致时停下并查明原因，不能把“调用报错”当成“远端肯定没有发布”。
 此流程不承诺自动处理所有部分失败，也不执行部署、重启或用户数据迁移。
+
+<a id="atomic-release-publication"></a>
+正式、非 draft、非 prerelease 且资产完整的 Release 才是发布就绪信号。workflow
+在远端资产回读和复验前保持 draft；部分上传或失败的 draft 留作诊断，不得被自动
+删除或覆盖。创建、上传、转正式或最终回读出现失败/未知结果时，先读取远端真实状态，
+不得盲目重跑变更请求。

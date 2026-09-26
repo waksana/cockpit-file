@@ -39,3 +39,13 @@ test('lightweight and annotated remote tags must still identify the checked comm
   assert.throws(() => checkTagTarget('v0.1.0', sha, `${'b'.repeat(40)}\trefs/tags/v0.1.0`), /moved/);
   assert.throws(() => checkTagTarget('v0.1.0', sha, ''));
 });
+
+test('release keeps the verified archive hidden until remote assets pass verification', async () => {
+  const workflow = await readFile(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
+  for (const text of ['uses: ./.github/workflows/build.yml', 'actions: read', 'check-release.mjs',
+    '--verify-tag --draft', 'gh release download', 'gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest']) {
+    assert.ok(workflow.includes(text), text);
+  }
+  assert.ok(workflow.indexOf('gh release download') < workflow.indexOf('gh release edit'));
+  assert.doesNotMatch(workflow, /--clobber|pnpm (?:build|package)|pull_request_target|secrets\./);
+});
