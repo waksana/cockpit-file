@@ -8,6 +8,7 @@ import { decodeMessageReference, isLocalFileReference, managedFileUrl } from '..
 import { createFileStorage, FileStorageError, type FileLookup, type FileMetadata, type FileRange } from './storage.ts';
 import { createMarkdownScanner, type MarkdownReference, type MarkdownScanner } from './scanner.ts';
 import { createWorkLimit } from './work.ts';
+import { displayVersion } from '../shared/version.ts';
 
 interface MessageState {
   sessionId: string;
@@ -280,7 +281,7 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
   }
 
   return {
-    publicConfig: { maxBytes, nativePathPrefix: `${storage.root}/files/` },
+    publicConfig: { maxBytes, nativePathPrefix: `${storage.root}/files/`, displayVersion },
     events: {
       types: ['assistant.message_start', 'assistant.message_delta', 'assistant.message', 'assistant.turn_end', 'abort', 'session.shutdown'],
       handle: observe,

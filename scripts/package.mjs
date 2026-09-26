@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { lstat, mkdir, readdir, readFile, writeFile, rm, rmdir } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, writeFile, rm, rmdir, cp } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkedBuild, INSTRUCTIONS_LIMIT } from './build-identity.mjs';
+import { checkedBuild, inventory, INSTRUCTIONS_LIMIT } from './build-identity.mjs';
+import { buildIdentity, deploymentDescriptor } from './rolling-identity.mjs';
 
 async function regularTree(directory) {
   if (!(await lstat(directory)).isDirectory()) throw new Error(`Not a build directory: ${directory}`);
@@ -40,16 +41,36 @@ export async function packageModule(root, output) {
   }
   await regularTree(join(root, 'dist'));
   if (!(await lstat(join(root, 'LICENSE'))).isFile()) throw new Error('Missing module license');
-  await checkedBuild(root);
+  const receipt = await checkedBuild(root);
+  const identity = await buildIdentity(root);
+  manifest.version = identity.version;
   await mkdir(output);
   const name = `${manifest.id}-${manifest.version}.tgz`;
   const archive = join(output, name);
+  const stage = join(output, '.stage');
   try {
+    await mkdir(stage);
+    await cp(join(root, 'dist'), join(stage, 'dist'), { recursive: true });
+    await cp(join(root, 'LICENSE'), join(stage, 'LICENSE'));
+    await writeFile(join(stage, 'cockpit.module.json'), JSON.stringify(manifest, null, 2) + '\n');
+    const roots = ['cockpit.module.json', 'dist', 'LICENSE'];
+    if (identity.sequence) {
+      const bytes = JSON.stringify(await deploymentDescriptor(root, identity), null, 2) + '\n';
+      await writeFile(join(stage, 'cockpit-deployment.json'), bytes);
+      await writeFile(join(output, 'cockpit-deployment.json'), bytes, { flag: 'wx' });
+      await writeFile(join(output, 'cockpit-deployment.json.sha256'),
+        `${createHash('sha256').update(bytes).digest('hex')}  cockpit-deployment.json\n`, { flag: 'wx' });
+      roots.push('cockpit-deployment.json');
+    }
+    await writeFile(join(stage, '.module-build.json'), JSON.stringify({
+      ...receipt, files: await inventory(stage, roots),
+    }, null, 2) + '\n');
     const result = spawnSync('tar', ['--sort=name', '--mtime=@0', '--owner=0', '--group=0', '--numeric-owner',
       '--hard-dereference', '--transform=s/^\\.module-build\\.json$/module-build.json/',
-      '-czf', archive, 'cockpit.module.json', 'dist', 'LICENSE', '.module-build.json'], { cwd: root, stdio: 'pipe' });
+      '-czf', archive, ...roots, '.module-build.json'], { cwd: stage, stdio: 'pipe' });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`tar failed (${result.status}): ${result.stderr.toString()}`);
+    await rm(stage, { recursive: true });
     await checkedBuild(root);
     const hash = createHash('sha256');
     for await (const bytes of createReadStream(archive)) hash.update(bytes);
@@ -59,6 +80,9 @@ export async function packageModule(root, output) {
     try {
       await rm(`${archive}.sha256`, { force: true });
       await rm(archive, { force: true });
+      await rm(stage, { recursive: true, force: true });
+      await rm(join(output, 'cockpit-deployment.json'), { force: true });
+      await rm(join(output, 'cockpit-deployment.json.sha256'), { force: true });
       await rmdir(output);
     } catch (cleanup) { throw new AggregateError([error, cleanup], 'Packaging failed and output cleanup failed'); }
     throw error;

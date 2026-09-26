@@ -1,126 +1,92 @@
-# CI 与版本发行
+# Rolling releases and Milestones
 
-本仓库的 Release 是可供 Cockpit 本地安装的模块包，不是 npm 包或源码 ZIP。
+This workflow replaces manual stable-version preparation and tag-push publication
+starting with the PR introducing it. Historical tags and Releases remain unchanged;
+no historical PR is backfilled. These are installable module archives, not npm packages.
 
-每个 `vX.Y.Z` Release 发布两项：
+## Rolling boundary and identity
+
+Every actual PR merge into `main`, including docs and chores, triggers `Rolling`
+(`.github/workflows/release.yml`) using the closed, merged PR event and its exact
+`merge_commit_sha`. Closing without merging publishes nothing. There are no labels,
+path filters or a shared concurrency queue that could discard consecutive merges.
+Do not rename/reset this workflow: its `github.run_number` is the stable positive
+sequence, including across reruns. Gaps are permitted; completion time is not order.
+Consumers select the greatest compatible sequence, never the most recently completed
+run. A failed attempt neither blocks later merges nor becomes a successful candidate.
+
+Committed `package.json` and `cockpit.module.json` stay at `0.0.0-dev`. Ordinary builds
+expose `dev+<shortSHA>` through the backend's `publicConfig.displayVersion` and
+`dist/build-identity.json`. Release jobs build the exact clean merge commit and inject
+`0.0.0-rolling.<sequence>` into a private archive staging copy, build receipt and runtime
+identity. The immutable tag is `v0.0.0-rolling.<sequence>`. Nothing writes versions
+back to `main`; the separately published SDK version and lock integrity are unchanged.
+
+The reusable `CI / Required checks` workflow installs the locked registry SDK, runs
+typecheck/tests/build, packages and verifies the original archive, then exercises it
+through the pinned integration host. PR validation creates development artifacts,
+not Releases. Rolling publication downloads the same run's checked artifact and
+does not rebuild it. Build provenance requires clean committed source.
+
+## Four verified assets
+
+Each Rolling Release has exactly:
 
 ```text
-cockpit-file-X.Y.Z.tgz
-cockpit-file-X.Y.Z.tgz.sha256
+cockpit-file-0.0.0-rolling.N.tgz
+cockpit-file-0.0.0-rolling.N.tgz.sha256
+cockpit-deployment.json
+cockpit-deployment.json.sha256
 ```
 
-`.tgz` 包含 `cockpit.module.json`、编译后的 `dist/`、LICENSE 和
-`module-build.json`. It records the module source SHA, SDK package name/version,
-registry URL, resolved tarball and SHA-512 integrity, Node/platform and file inventory;
-不包含用户数据。校验文件检测完整性，不是独立发布者签名。
+The archive contains the module manifest, compiled `dist/`, LICENSE, build receipt
+and root `cockpit-deployment.json`. The descriptor is byte-identical to its sidecar.
+Both standalone checksum assets use SHA-256. The archive checksum is never embedded
+in the descriptor: doing so would introduce self-reference. Checksums detect integrity
+changes, not independent publisher signatures.
 
-## 检查链
+The format-2 descriptor declares channel `rolling`, repository, source SHA, tag,
+version, sequence and archive name. `scripts/rolling-identity.mjs` derives the module
+API range from the manifest and checks the actual frontend/draft/storage contracts.
+File requires backend/module API 1, frontend API 2, UI/surface 1, composer input,
+draft lifecycle and draft submission capabilities. It invokes no host intents.
+Storage is ordinary file bodies with version-2 metadata, not SQLite: databases and
+migrations are empty. This does not authorize deletion, recapture, migration or
+weakening retention of existing snapshots and drafts. Changes to these contracts
+must update their source-derived descriptor and tests; unknown compatibility fails.
+No machine-local per-release compatibility catalog is maintained.
 
-PR、main push 和 Release 共用 `CI / Required checks`：
+## Publication, failure and recovery
 
-```text
-固定文件仓库 SHA
- -> authenticated GitHub Packages frozen-lockfile install (no host checkout)
- -> typecheck + tests
- -> build + 构建凭据
- -> 从同一干净提交打包
- -> 检查归档、摘要、来源和 SDK
- -> checkout the exact tooling/host-integration.json host
- -> 用固定宿主实际安装并运行模块集成用例
- -> 保存该次原始 artifact
-```
+Publication verifies source, package/build versions, SDK identity, file inventory,
+four assets, both checksums and embedded/sidecar equality. Tag creation is immutable.
+A draft is created with the corresponding PR's full title and body plus deterministic
+source and asset information. Each uploaded asset is downloaded and byte-checked.
+Only a complete verified draft becomes a non-draft **prerelease** with
+`make_latest=false`; Rolling never claims Latest. That publication atomically seals
+the original four asset IDs, names, sizes and SHA-256 hashes in the release body.
 
-检查使用只读权限、合成文件和会话事件，不需要生产凭据，不启动真实模型。
-Actions 固定完整提交 SHA；开发 artifact 保留 7 天，正式 Release 资产独立保留。
-SDK version/integrity and host compatibility are separate inputs. CI uses the repository
-`GITHUB_TOKEN` with `packages: read` and must prove real package access; local developer
-credentials are not a substitute. The host pin is only for integration tests, never SDK
-generation or module builds. Release verification installs frozen dependencies to parse
-the same lockfile but does not rebuild the downloaded artifact.
+All tag/release/asset mutations use one direct HTTPS attempt, without redirects or
+automatic retries. A timeout, cancellation or malformed write acknowledgement means
+the remote result is **unknown**, not absent. Stop and inspect authoritative tag,
+release/draft IDs and asset IDs/bytes. Do not blindly rerun, replace assets, move tags,
+delete releases or use clobber. Separately authorized recovery can rerun the original
+run: it retains the original sequence/source, only fills genuinely missing draft
+assets, and refuses conflicting bytes or identity. A published complete release is
+read-only, including one subsequently promoted. Rebuilding changed source requires
+a new genuine PR merge and sequence, never a fallback release of the old identity.
 
-The current source assigns File 0.2.6 to the compatible capture-error fix. Preserve
-the original successful main CI archive for any separately authorized joint
-deployment; do not publish changed bytes under the existing 0.2.5 identity.
-Version preparation and merge are not publication or deployment.
+## Explicit Milestone selection
 
-## 发行步骤
+Run the **Milestone** workflow on `main` only after a user chooses one existing,
+successful Rolling tag. Supply `tag` and repeat it exactly as `confirm_tag`.
+The workflow rejects non-Rolling tags, drafts, wrong source/version, missing,
+unexpected or changed assets and checksum/embedded descriptor mismatches.
+It snapshots release/asset IDs and bytes twice before its single PATCH and again
+afterwards, comparing them with the original publication seal (not merely with
+replacement checksums). Only `prerelease=false` and `make_latest=true` change on the original
+release; no build, renumbering, new tag/release, asset upload, title or body edit occurs.
+An ambiguous write result must be inspected, not automatically retried.
 
-1. 通过 PR 同时修改 package.json、cockpit.module.json 的版本及本次 release-notes.md。
-2. 合入 main，确认该提交的 Required checks 成功。
-3. 创建指向该完整 SHA 的 `vX.Y.Z` tag 并推送。
-4. Release workflow 在该 tag 上复用同一检查，下载同次已验证 artifact。
-5. 发布前再次核对 tag/version/来源/SDK/Node/文件摘要，以及远端 tag 仍指向同一提交。
-6. 把原始 `.tgz` 和 checksum 暂存到 draft，重新下载并复验远端资产；仅在两项资产
-   完整且身份一致后，将 draft 一次性转成正式、非 prerelease 的 Latest Release。
-   publish job 不重新构建。
-
-版本 tag 不允许更新或删除。已发布资产不自动覆盖；源代码修复应使用新版本。
-本次配置不自动创建首个 tag 或 Release，也不合并 Cockpit 本体的 PR。
-
-After a joint deployment with the host, tag and release the accepted commit per Cockpit's [release after a joint deployment](https://github.com/waksana/cockpit/blob/main/docs/releasing.md#release-after-acceptance) policy.
-
-## 本地构建与来源
-
-普通 dirty-tree build 可以开发，但不能作为发行包来源。
-`pnpm build` 记录 `.module-build.json`；`pnpm package` 要求源码干净且已提交，
-build receipt 与当前源码、SDK 和 dist 文件一致。提交后必须重新构建。
-不要手写 build receipt 绕过门禁。
-
-## 发布失败与重跑
-
-网络错误或取消后，先查询 GitHub 上的 tag、Release/draft 和资产状态。
-已有 Release 的重跑不会自动覆盖；不要移动 tag、盲删 Release 或使用 clobber。
-确认不一致时停下并查明原因，不能把“调用报错”当成“远端肯定没有发布”。
-此流程不承诺自动处理所有部分失败，也不执行部署、重启或用户数据迁移。
-
-### Exact-tag draft recovery
-
-`scripts/publish-release.mjs` discovers releases through the authenticated,
-fully paginated `GET /repos/{owner}/{repo}/releases` list and matches `tag_name`
-exactly. The published-release-by-tag endpoint is **not** a draft lookup; its
-404 does not prove that no draft exists. The workflow token needs `contents: write`
-to see and manage drafts. Discovery/authentication/pagination failures stop the
-workflow without creating anything.
-
-| Observed state | Workflow action |
-| --- | --- |
-| No exact-tag release after successful discovery | Create one draft bound to the full checked source SHA, then rediscover its returned ID. |
-| One matching draft | Check its source and every existing asset by ID; upload only missing expected assets, then read back their bytes. |
-| One identical, complete published release | Report `already_published`; no writes, including no Latest change. |
-| Multiple exact-tag releases, conflicting source/state or unexpected/duplicate/incomplete/corrupt assets | Stop; do not select one, delete anything or replace an asset. |
-| Failed write or unconfirmed readback | Stop with the outcome unconfirmed; no automatic write retry or cleanup. |
-
-Before publication, the local archive must pass the existing package, manifest,
-version, notes, source SHA, SDK integrity, Node and file-inventory checks. Remote
-archive **and checksum bytes** must equal that exact checked CI artifact; names,
-sizes or metadata alone are insufficient. The checkout and remote (lightweight
-or peeled annotated) tag must still identify the accepted mainline commit.
-New drafts record `target_commitish` as its full SHA. A legacy draft recording a
-ref such as `main` is recoverable only while that ref still resolves to the same
-SHA; a moved or unresolvable ref is a conflict, not permission to retarget it.
-
-Release discovery and asset verification run again before each upload and before
-the single publish-by-ID PATCH (`draft: false`, `prerelease: false`,
-`make_latest: true`), followed by published-state/asset readback. An empty or
-partial draft is recoverable only when all present assets are complete and
-byte-identical. A GitHub `starter` asset or mismatched bytes requires investigation.
-No path overwrites assets, moves/creates a tag, rebuilds an archive or modifies the
-independent SDK publication chain.
-
-After a timeout/cancellation, inspect the paginated release list, selected release
-ID and its asset list before explicitly rerunning the workflow. A failed create,
-upload or publish may already have applied; a later recovery starts with fresh
-reads rather than replaying that request. Preserve the original checked artifact:
-different bytes from a rerun are a conflict, not a replacement candidate.
-GitHub does not provide an atomic compare-and-publish operation across these
-reads; workflow concurrency serializes this workflow per tag, not manual/API
-writers. Do not edit a release concurrently. Recovery code merged later does not
-retroactively change workflows/scripts at an old tag; never move that tag to pick
-up the fix. An old-tag recovery needs a separately authorized procedure using the
-original source/artifact and reviewed recovery code.
-
-<a id="atomic-release-publication"></a>
-正式、非 draft、非 prerelease 且资产完整的 Release 才是发布就绪信号。workflow
-在远端资产回读和复验前保持 draft；部分上传或失败的 draft 留作诊断，不得被自动
-删除或覆盖。创建、上传、转正式或最终回读出现失败/未知结果时，先读取远端真实状态，
-不得盲目重跑变更请求。
+Publication and promotion do not install, deploy, restart the host, mutate module
+data or contact an external deployment service. Those need separate authorization.

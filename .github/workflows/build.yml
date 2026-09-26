@@ -5,6 +5,13 @@ on:
   push:
     branches: [main]
   workflow_call:
+    inputs:
+      source_sha:
+        type: string
+        required: true
+      sequence:
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -22,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.source_sha || github.sha }}
           fetch-depth: 1
           persist-credentials: false
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
@@ -38,15 +45,36 @@ jobs:
           NODE_AUTH_TOKEN: ${{ github.token }}
       - run: pnpm typecheck
       - run: pnpm test
-      - run: pnpm build
-      - run: pnpm package
+      - name: Build and package the isolated identity
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SEQUENCE: ${{ inputs.sequence }}
+        run: |
+          if [ -n "$SEQUENCE" ]; then
+            export ROLLING_SEQUENCE="$SEQUENCE" ROLLING_SOURCE_SHA="$SOURCE_SHA"
+          fi
+          pnpm build
+          pnpm package
       - id: integration
         name: Read pinned integration host
-        run: node scripts/host-integration.mjs >> "$GITHUB_OUTPUT"
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SEQUENCE: ${{ inputs.sequence }}
+        run: |
+          if [ -n "$SEQUENCE" ]; then
+            export ROLLING_SEQUENCE="$SEQUENCE" ROLLING_SOURCE_SHA="$SOURCE_SHA"
+          fi
+          node scripts/host-integration.mjs >> "$GITHUB_OUTPUT"
       - name: Verify the exact module archive
         env:
           ARCHIVE: ${{ steps.integration.outputs.archive }}
-        run: node scripts/verify-package.mjs "module-output/$ARCHIVE" "$GITHUB_SHA"
+          SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+          SEQUENCE: ${{ inputs.sequence }}
+        run: |
+          if [ -n "$SEQUENCE" ]; then
+            export ROLLING_SEQUENCE="$SEQUENCE" ROLLING_SOURCE_SHA="$SOURCE_SHA"
+          fi
+          node scripts/verify-package.mjs "module-output/$ARCHIVE" "$SOURCE_SHA"
       - name: Check out the integration host (not a build input)
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -74,9 +102,11 @@ jobs:
             "$GITHUB_WORKSPACE/scripts/test-support/capture-feedback.integration.mjs"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: cockpit-file-${{ github.sha }}-linux-x64
+          name: cockpit-file-${{ inputs.source_sha || github.sha }}-linux-x64
           path: |
             module-output/*.tgz
             module-output/*.tgz.sha256
+            module-output/cockpit-deployment.json
+            module-output/cockpit-deployment.json.sha256
           if-no-files-found: error
           retention-days: 7

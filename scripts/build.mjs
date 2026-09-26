@@ -3,6 +3,7 @@ import { copyFile, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sdkIdentity, sourceIdentity, writeBuildReceipt } from './build-identity.mjs';
+import { buildIdentity } from './rolling-identity.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 await sdkIdentity(root);
@@ -27,4 +28,7 @@ await copyFile(resolve(root, 'src/web/styles.css'), resolve(root, 'dist/web/styl
 await copyFile(resolve(root, 'src/instructions.md'), resolve(root, 'dist/instructions.md'));
 await mkdir(resolve(root, 'dist/licenses'), { recursive: true });
 await copyFile(resolve(root, 'node_modules/lucide-static/LICENSE'), resolve(root, 'dist/licenses/lucide.txt'));
+const identity = await buildIdentity(root);
+await writeFile(resolve(root, 'dist/shared/version.js'), `export const displayVersion = ${JSON.stringify(identity.displayVersion)};\n`);
+await writeFile(resolve(root, 'dist/build-identity.json'), JSON.stringify(identity, null, 2) + '\n');
 await writeBuildReceipt(root, before);

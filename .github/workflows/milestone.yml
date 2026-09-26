@@ -1,0 +1,41 @@
+name: Milestone
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing successful Rolling tag to promote
+        required: true
+        type: string
+      confirm_tag:
+        description: Repeat the exact selected tag to confirm in-place promotion
+        required: true
+        type: string
+permissions:
+  contents: write
+  packages: read
+jobs:
+  promote:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version-file: .node-version
+          registry-url: https://npm.pkg.github.com
+          scope: '@waksana'
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+      - name: Verify unchanged assets and promote the original release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELECTED_TAG: ${{ inputs.tag }}
+          CONFIRM_TAG: ${{ inputs.confirm_tag }}
+        run: node scripts/rolling-release.mjs promote "$SELECTED_TAG" "$CONFIRM_TAG"

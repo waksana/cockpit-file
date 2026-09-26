@@ -81,13 +81,12 @@ test('CI builds from the registry before checking out the isolated integration h
   const install = steps.find(step => step.run === 'pnpm install --frozen-lockfile --ignore-scripts');
   assert.equal(install.env.NODE_AUTH_TOKEN, '${{ github.token }}');
   assert.equal(steps.find(step => step.uses?.startsWith('actions/setup-node@')).with['registry-url'], 'https://npm.pkg.github.com');
-  assert.ok(steps.findIndex(step => step.run === 'pnpm package')
+  assert.ok(steps.findIndex(step => step.run?.includes('pnpm package'))
     < steps.findIndex(step => step.with?.path === '.host-integration'));
   assert.match(release, /uses: \.\/\.github\/workflows\/build\.yml/);
   assert.equal(parse(release).jobs.checks.permissions.packages, 'read');
   assert.match(release, /needs: checks/);
-  assert.match(release, /check-release\.mjs/);
-  assert.match(release, /node scripts\/publish-release\.mjs/);
+  assert.match(release, /node scripts\/rolling-release\.mjs publish/);
   assert.doesNotMatch(release, /pnpm (?:build|package)|--clobber|ssh |systemctl/);
   for (const workflow of [ci, release]) {
     for (const [, use] of workflow.matchAll(/uses:\s+([^\s]+)/g)) {
