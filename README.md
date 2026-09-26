@@ -22,10 +22,10 @@ to each Cockpit session, telling agents to give files as Markdown links/images i
 
 ## 当前状态
 
-**Current source prepares File 0.2.5 for the SDK-consumer migration.**
+**Current source prepares File 0.2.6 for reference-scoped missing capture failures.**
 Builds use the published `@waksana/cockpit-module-sdk@0.2.0` from GitHub Packages,
 without a host checkout. Package/manifest versions agree at the fresh patch identity
-0.2.5; this preparation does not publish, install or deploy the changed archive.
+0.2.6; this preparation does not publish, install or deploy the changed archive.
 The exact integration host is recorded in [`tooling/host-integration.json`](tooling/host-integration.json).
 SDK semver does not replace Web API v2, public UI v1 or capability checks;
 hosts predating manifest `instructions` (including 0.3.0) reject the module.

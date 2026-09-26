@@ -2,16 +2,16 @@
 
 ## 集成状态
 
-Current source prepares File **0.2.5** for the SDK-consumer migration.
+Current source prepares File **0.2.6** for reference-scoped missing capture failures.
 The manifest declares default `instructions`; hosts that predate this field (including 0.3.0) reject the module.
 The build dependency is the published **`@waksana/cockpit-module-sdk@0.2.0`** from
 `https://npm.pkg.github.com`, pinned exactly in `package.json` and `pnpm-lock.yaml`.
 The integration host is mainline commit `7d69b6f348e17f098bc5562fdbec317e8e2e4ba6`,
 recorded separately in [`tooling/host-integration.json`](../tooling/host-integration.json).
 It is not required to build or package the module. SDK and host versions are independent.
-Package/manifest metadata agree at the fresh patch identity 0.2.5. This preparation
+Package/manifest metadata agree at the fresh patch identity 0.2.6. This preparation
 does not publish, install, deploy or restart anything; changed package bytes must
-not replace the historical 0.2.4 identity.
+not replace the historical 0.2.5 identity.
 
 构建输出 `dist/web/index.js` / `styles.css`，位于已有公开 asset 根。
 模块只打包自身逻辑和布局样式，公共组件和主题由宿主提供；既有草稿编码不变。
@@ -28,10 +28,10 @@ this module currently needs no runtime SDK import.
 不能先运行新宿主却期待旧模块前端继续兼容。CI 不执行安装、部署或重启。
 已发行 0.1.6 的使用方法和兼容条件见其 tag 文档，不把本开发分支当成已发布资产。
 
-After [v0.2.5 Release](https://github.com/waksana/cockpit-file/releases/tag/v0.2.5)
-is published, download `cockpit-file-0.2.5.tgz` and
-`cockpit-file-0.2.5.tgz.sha256`, then run
-`sha256sum -c cockpit-file-0.2.5.tgz.sha256` before installation.
+After [v0.2.6 Release](https://github.com/waksana/cockpit-file/releases/tag/v0.2.6)
+is published, download `cockpit-file-0.2.6.tgz` and
+`cockpit-file-0.2.6.tgz.sha256`, then run
+`sha256sum -c cockpit-file-0.2.6.tgz.sha256` before installation.
 Before publication, an explicitly authorized joint deployment uses the unchanged
 successful CI archive for the exact merged main commit. An older package is not
 a substitute for this version, and a CI archive is not a published Release.
