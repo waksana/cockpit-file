@@ -52,6 +52,7 @@ function fixture() {
   const definitions: { create(reference: DraftReference): FileState }[] = [];
   const disposers: (() => void)[] = [];
   const state: ModuleStateRegistry = {
+    createDraft() { assert.fail('File does not create consumer drafts'); },
     chatWindow: { getSnapshot() { assert.fail('Picker does not read chat windows'); }, subscribe() { assert.fail('Picker does not subscribe to chat windows'); } },
     host: { getSnapshot: () => ({ sessionId: null, visible: true, connected: true }), subscribe: () => () => {} },
     bindDraft: () => { throw new Error('Picker cannot write base draft state'); },
@@ -90,6 +91,7 @@ function fixture() {
   });
   const makeDraft = (sessionId = 'synthetic-session', purpose: DraftPurpose = { kind: 'prompt' }) => {
     let snapshot: ModuleDraftSnapshot = {
+      editable: true, submittable: true, capabilities: { attachments: purpose.kind === 'prompt' }, actionRevision: 0,
       text: '', revision: 0, blocks: [], pending: false, unconfirmed: false, hasContent: false, retired: false,
     };
     const reference: DraftReference = Object.freeze({
@@ -113,6 +115,7 @@ function fixture() {
     return {
       reference, alias, files: drafts.get(alias),
       pending(value: boolean) { snapshot = { ...snapshot, pending: value }; },
+      update(patch: Partial<ModuleDraftSnapshot>) { snapshot = { ...snapshot, ...patch }; },
     };
   };
   return {
@@ -193,6 +196,25 @@ test('native cancel and empty change close callbacks without uploads or errors',
   }
 });
 
+test('owner editability, attachment capability and retirement gate both initial and late input', () => {
+  for (const patch of [{ editable: false }, { capabilities: { attachments: false } }, { retired: true }]) {
+    const h = fixture();
+    const draft = h.makeDraft();
+    h.service.pick(target(draft));
+    draft.update(patch);
+    h.inputs[0]!.files = [file()];
+    h.inputs[0]!.emit('change');
+    h.service.pick(target(draft));
+    h.service.paste(event([file()]), target(draft));
+    h.service.drop(event([file()]), target(draft));
+    const drag = event([file()]);
+    h.service.dragOver(drag, target(draft));
+    assert.equal(drag.dataTransfer.dropEffect, 'none');
+    assert.equal(h.inputs.length, 1);
+    assert.equal(h.received.length, 0);
+    h.dispose();
+  }
+});
 test('a new picker retires the previous selection and late results never upload to either draft', () => {
   const h = fixture();
   const first = h.makeDraft();

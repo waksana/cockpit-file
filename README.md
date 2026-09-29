@@ -22,12 +22,12 @@ to each Cockpit session, telling agents to give files as Markdown links/images i
 
 ## 当前状态
 
-**Current source prepares File 0.2.6 for reference-scoped missing capture failures.**
-Builds use the published `@waksana/cockpit-module-sdk@0.2.0` from GitHub Packages,
-without a host checkout. Package/manifest versions agree at the fresh patch identity
-0.2.6; this preparation does not publish, install or deploy the changed archive.
+**Current source uses one File enhancement chain for native and generic owner drafts.**
+Builds use published `@waksana/cockpit-module-sdk@0.7.0` from GitHub Packages,
+without a host checkout. Source versions stay `0.0.0-dev`; normal main merges
+attempt [Rolling publication](docs/releases.md), not installation or deployment.
 The exact integration host is recorded in [`tooling/host-integration.json`](tooling/host-integration.json).
-SDK semver does not replace Web API v2, public UI v1 or capability checks;
+SDK semver does not replace Web API v3, public UI v1 or capability checks;
 hosts predating manifest `instructions` (including 0.3.0) reject the module.
 有任意草稿的未完成上传、失败选择或未加入草稿的上传结果时，浏览器离开确认保护刷新与关页；
 浏览器可能限制确认框，确认离开不保证恢复这些内存任务。
@@ -39,10 +39,12 @@ hosts predating manifest `instructions` (including 0.3.0) reject the module.
 Web 层采用注册 state 服务、
 组件 middleware 和独立 Markdown link/image 渲染器；后端行为不变。
 附件属于文件模块注册的草稿 schema，完整草稿文件列表也由模块提供。
-基础草稿没有附件字段；扩展不可用时不参与发送，也不由本体补文件兜底 UI。
+The base draft has no built-in attachment field. Unavailable persisted schemas
+block submission instead of silently sending text only; no fallback File UI is invented.
 原生问答使用独立草稿，普通 prompt 草稿及其文件保留，问题结束后恢复。
-前端入口要求 Web API v2、公共 UI v1、`uiSurfaceVersion: 1` 与 `context.createPortal`；
-旧 Web 插口不保留兼容层，不能只看宿主包版本号或后端 API v1 推断兼容。
+The frontend requires API v3, publicComponents v1, draftOwner v1,
+draftSubmission v2, UI/surface v1 and `context.createPortal`.
+Legacy compatibility belongs to the host, not a second File implementation.
 The exact build dependency is in `package.json` / `pnpm-lock.yaml`; see the [installation guide](docs/installation.md).
 公共样式、图标和兼容规则以宿主
 [模块 UI 开发指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md) 为唯一权威。

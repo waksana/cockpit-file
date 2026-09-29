@@ -19,6 +19,7 @@ export interface FileState {
 
 export interface FileDraftSnapshot extends ModuleDraftSnapshot {
   readonly attachments: readonly FileAttachment[];
+  readonly protectedAttachmentIds: readonly string[];
 }
 
 export interface FileDraft extends DraftReference {
@@ -30,6 +31,14 @@ export interface FileDraft extends DraftReference {
 
 export interface FileComposerContext extends ComposerTarget {
   readonly draft: FileDraft;
+}
+
+export function acceptsFiles(snapshot: ModuleDraftSnapshot): boolean {
+  return snapshot.editable && snapshot.capabilities.attachments && !snapshot.retired && !snapshot.pending;
+}
+
+export function canRemoveFile(snapshot: FileDraftSnapshot, id: string): boolean {
+  return acceptsFiles(snapshot) && !snapshot.protectedAttachmentIds.includes(id);
 }
 
 function record(value: unknown, keys: readonly string[]): Record<string, unknown> {
@@ -107,7 +116,11 @@ export const fileDraftSchema: DraftSchemaRegistration<FileState> = {
   create: () => validateFileState({ revision: 0, attachments: [] }),
   validate: validateFileState,
   hasContent: state => state.attachments.length > 0,
-  project: state => state.attachments.length ? { attachments: state.attachments.map(item => item.value) } : undefined,
+  project: (state, submission) => {
+    if (!state.attachments.length) return undefined;
+    if (!submission.base.capabilities.attachments) throw new Error('This draft does not accept attachments');
+    return { attachments: state.attachments.map(item => item.value) };
+  },
   acknowledge: (current, captured) => {
     const submitted = new Map(captured.attachments.map(item => [item.id, item]));
     return {
@@ -140,11 +153,11 @@ export const fileDraftSchema: DraftSchemaRegistration<FileState> = {
 
 class FileDraftAdapter implements FileDraft {
   readonly id: string;
-  readonly sessionId: string;
   readonly purpose: DraftReference['purpose'];
   private baseSnapshot?: Readonly<ModuleDraftSnapshot>;
   private fieldSnapshot?: Readonly<FileState>;
   private snapshot?: FileDraftSnapshot;
+  private protectedItems?: readonly FileState['attachments'][number][];
   private readonly subscriptions = new Set<() => void>();
   private disposed = false;
   readonly reference: DraftReference;
@@ -160,7 +173,6 @@ class FileDraftAdapter implements FileDraft {
     this.field = field;
     this.base = base;
     this.id = reference.id;
-    this.sessionId = reference.sessionId;
     this.purpose = reference.purpose;
   }
 
@@ -173,9 +185,21 @@ class FileDraftAdapter implements FileDraft {
     const base = this.reference.getSnapshot();
     const field = this.field().getSnapshot();
     if (base !== this.baseSnapshot || field !== this.fieldSnapshot) {
+      const unresolved = base.pending || base.unconfirmed;
+      if (!unresolved) this.protectedItems = undefined;
+      else if (!this.protectedItems || base.submissionId !== this.baseSnapshot?.submissionId) {
+        // This is only a removal guard, never ACK authority. A restored unresolved
+        // transaction conservatively protects all restored items until host settlement.
+        this.protectedItems = field.attachments;
+      }
       this.baseSnapshot = base;
       this.fieldSnapshot = field;
-      this.snapshot = Object.freeze({ ...base, attachments: field.attachments });
+      this.snapshot = Object.freeze({
+        ...base, attachments: field.attachments,
+        protectedAttachmentIds: Object.freeze(field.attachments.filter(item =>
+          this.protectedItems?.some(previous => previous.id === item.id && previous.revision === item.revision &&
+            JSON.stringify(previous.value) === JSON.stringify(item.value))).map(item => item.id)),
+      });
     }
     return this.snapshot!;
   }
@@ -193,6 +217,8 @@ class FileDraftAdapter implements FileDraft {
 
   appendAttachments(values: readonly FileAttachment[]): void {
     this.active();
+    const snapshot = this.reference.getSnapshot();
+    if (snapshot.retired || !snapshot.capabilities.attachments) throw new Error('This draft no longer accepts attachments');
     const incoming = attachmentInputs(values);
     this.field().update(current => {
       const revision = current.revision + 1;
@@ -209,7 +235,7 @@ class FileDraftAdapter implements FileDraft {
 
   removeAttachment(id: string): void {
     this.active();
-    if (this.reference.getSnapshot().pending) throw new Error('消息正在提交，请等待回执后再修改附件。');
+    if (!canRemoveFile(this.getSnapshot(), id)) throw new Error('草稿不可编辑或提交尚未确认，请等待回执后再修改附件。');
     this.field().update(current => ({ ...current, attachments: current.attachments.filter(item => item.id !== id) }));
   }
 

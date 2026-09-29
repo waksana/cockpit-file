@@ -30,11 +30,15 @@ export async function deploymentDescriptor(root, identity) {
   const draft = await readFile(`${root}/src/web/file-draft.ts`, 'utf8');
   const storage = await readFile(`${root}/src/server/storage.ts`, 'utf8');
   assert.equal(manifest.apiVersion, 1);
-  assert.match(frontend, /context\.apiVersion !== 2/);
+  assert.match(frontend, /export const frontendApiVersion = 3/);
+  assert.match(frontend, /context\.apiVersion !== 3/);
+  assert.match(frontend, /context\.publicComponentsVersion !== 1/);
+  assert.match(frontend, /context\.draftOwnerVersion !== 1/);
+  assert.match(frontend, /context\.draftSubmissionVersion !== 2/);
   assert.match(frontend, /context\.uiVersion !== 1/);
   assert.match(frontend, /context\.uiSurfaceVersion !== 1/);
   assert.match(draft, /registerDraft/);
-  assert.match(draft, /project: state/);
+  assert.match(draft, /project: \(state, submission\)/);
   assert.match(frontend, /onPaste=/);
   assert.match(storage, /version: 2/);
   assert.doesNotMatch(storage, /node:sqlite|CREATE TABLE/);
@@ -44,8 +48,8 @@ export async function deploymentDescriptor(root, identity) {
     archive: { name: `${manifest.id}-${version}.tgz` },
     product: {
       kind: 'module', id: manifest.id, hostApi: { min: manifest.apiVersion, max: manifest.apiVersion },
-      requiresCapabilities: ['module-api.v1', 'frontend-api.v2', 'ui.v1', 'uiSurface.v1',
-        'composerInput.v1', 'draftLifecycle.v1', 'draftSubmission.v1'],
+      requiresCapabilities: ['module-api.v1', 'frontend-api.v3', 'ui.v1', 'uiSurface.v1',
+        'composerInput.v1', 'draftLifecycle.v1', 'draftSubmission.v2', 'publicComponents.v1', 'draftOwner.v1'],
       requiredIntents: [], databases: [], migrations: [],
     },
   };

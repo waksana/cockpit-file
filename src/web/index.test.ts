@@ -53,8 +53,11 @@ class NativeInput extends EventTarget {
   click() { this.clicks++; }
 }
 const nativeInputs: NativeInput[] = [];
+const documentEvents = new EventTarget();
 Object.defineProperty(globalThis, 'document', { configurable: true, value: {
-  body, visibilityState: 'visible', addEventListener() {}, removeEventListener() {},
+  body, visibilityState: 'visible',
+  addEventListener: documentEvents.addEventListener.bind(documentEvents),
+  removeEventListener: documentEvents.removeEventListener.bind(documentEvents),
   createElement(tag: string) {
     assert.equal(tag, 'input');
     const input = new NativeInput();
@@ -62,6 +65,10 @@ Object.defineProperty(globalThis, 'document', { configurable: true, value: {
     return input;
   },
 } });
+function documentVisible(visible: boolean) {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value: visible ? 'visible' : 'hidden' });
+  documentEvents.dispatchEvent(new Event('visibilitychange'));
+}
 
 const bindings = new WeakMap<DraftReference, ModuleDraft>();
 const preparers = new Set<(draft: Draft) => void>();
@@ -71,7 +78,8 @@ class Draft implements ModuleDraft {
   readonly sessionId: string;
   readonly purpose: DraftPurpose;
   readonly reference: DraftReference;
-  snapshot: ModuleDraftSnapshot = { text: '', blocks: [], hasContent: false, revision: 0, pending: false, unconfirmed: false, retired: false };
+  snapshot: ModuleDraftSnapshot = { text: '', blocks: [], hasContent: false, revision: 0, pending: false, unconfirmed: false, retired: false,
+    editable: true, submittable: true, capabilities: { attachments: true }, actionRevision: 0 };
   listeners = new Set<() => void>();
   blocks = 0;
   constructor(sessionId = 'synthetic-session', purpose: DraftPurpose = { kind: 'prompt' }) {
@@ -196,6 +204,7 @@ function harness() {
   let host: HostSnapshot = Object.freeze({ sessionId: 'synthetic-session', visible: true, connected: true });
   let stopped = false;
   const state: ModuleStateRegistry = {
+    createDraft() { assert.fail('File does not create consumer drafts'); },
     chatWindow: { getSnapshot() { assert.fail('File does not read chat windows'); }, subscribe() { assert.fail('File does not subscribe to chat windows'); } },
     host: { getSnapshot: () => host, subscribe: listener => { hostListeners.add(listener); return () => hostListeners.delete(listener); } },
     register(registration) {
@@ -254,10 +263,12 @@ function harness() {
     for (const draft of boundDrafts) assert.equal(draft.blocks, 0, 'module loss releases generic leases without file fallback UI');
   });
   const context: ModuleFrontendContext = {
-    apiVersion: 2, moduleId: 'cockpit-file', react: react as unknown as ModuleFrontendContext['react'],
+    apiVersion: 3, moduleId: 'cockpit-file', react: react as unknown as ModuleFrontendContext['react'],
+    publicComponentsVersion: 1, draftOwnerVersion: 1, settingsVersion: 1,
+    components: { get() { assert.fail('File wraps the supplied Base'); } },
     uiVersion: 1,
     uiSurfaceVersion: 1,
-    menuVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 1,
+    menuVersion: 1, chatWindowVersion: 1, composerInputVersion: 1, draftLifecycleVersion: 1, draftSubmissionVersion: 2,
     createPortal: (node, container) => {
       assert.equal(container, body, 'dialogs use the standard document body, never private host DOM');
       return { type: 'fixture-portal', key: null, children: node, props: { children: [node], container } };
@@ -392,10 +403,10 @@ function selectFiles(frontend: ModuleFrontend, target: ComposerTarget, files: re
   return event.defaultPrevented;
 }
 
-test('activation registers scoped concrete services and only v2 component and Markdown boundaries', async () => {
+test('activation registers scoped concrete services and only v3 component and Markdown boundaries', async () => {
   const h = harness();
   const frontend = await activate(h.context);
-  assert.equal(frontend.apiVersion, 2);
+  assert.equal(frontend.apiVersion, 3);
   assert.equal(frontend.writes, undefined);
   assert.deepEqual(h.schemas.map(schema => ({ id: schema.id, purposes: schema.purposes })), [{ id: 'attachments', purposes: ['prompt'] }]);
   assert.deepEqual(frontend.components!.map(item => item.boundary), ['composer', 'composerEditor', 'attachment']);
@@ -432,8 +443,8 @@ test('activation explicitly rejects missing or unsupported public UI and portal 
   const h = harness();
   const { createPortal: _portal, ...legacy } = h.context;
   await assert.rejects(async () => activate(legacy as unknown as ModuleFrontendContext), /createPortal/);
-  for (const apiVersion of [undefined, 1, 3]) {
-    await assert.rejects(async () => activate({ ...h.context, apiVersion } as unknown as ModuleFrontendContext), /frontend API v2/);
+  for (const apiVersion of [undefined, 1, 2]) {
+    await assert.rejects(async () => activate({ ...h.context, apiVersion } as unknown as ModuleFrontendContext), /frontend API v3/);
   }
   await assert.rejects(async () => activate({
     ...h.context, state: { ...h.context.state, registerDraft: undefined },
@@ -638,10 +649,11 @@ test('ready row removal updates its schema and discards only this activation’s
   await settle();
   const render = () => h.render(composerComponent(frontend), { draft, operation: 'prompt', disabled: false });
   const first = render();
+  assert.equal(descendants(first).find(element => element.props['aria-label'] === '移除 Restored')!.props.disabled, true);
   click(descendants(first).find(element => element.props['aria-label'] === '移除 Restored')!);
   assert.equal(h.calls.some(call => call.init?.method === 'DELETE'), false);
   click(descendants(render()).find(element => element.props['aria-label'] === '移除 Owned')!);
-  assert.deepEqual(draft.fileSnapshot.attachments, []);
+  assert.deepEqual(draft.fileSnapshot.attachments.map(item => item.id), ['restored']);
   assert.equal(h.calls.filter(call => call.init?.method === 'DELETE').length, 1,
     'an unrelated old unconfirmed notice does not mark the new upload as submitted');
   assert.equal('attachments' in draft.getSnapshot(), false);
@@ -722,7 +734,7 @@ test('inherited editor cancellation wins, callback failures are reported, and di
   frontend.dispose?.();
 });
 
-test('file probes follow readonly host visibility and module resources do not cross activations', async () => {
+test('file probes follow document visibility and mounted consumers, never background host visibility', async () => {
   const a = harness();
   const b = harness();
   a.setHost({ visible: false });
@@ -736,17 +748,18 @@ test('file probes follow readonly host visibility and module resources do not cr
     origin: { sessionId: 'fixture', messageId: 'visibility' },
   };
   a.render(first.markdown![0]!.component, { node, fallback: 'core fallback' }); a.flushEffects();
-  assert.equal(a.calls.length, 0);
-  a.setHost({ visible: true });
-  assert.equal(a.calls.length, 1);
+  assert.equal(a.calls.length, 1, 'a mounted generic consumer probes even when background Chat is hidden');
   assert.equal(a.calls[0]!.init!.signal!.aborted, false);
-  a.setHost({ visible: false });
+  documentVisible(false);
   assert.equal(a.calls[0]!.init!.signal!.aborted, true);
+  documentVisible(true);
+  assert.equal(a.calls.length, 2);
+  a.unmount();
+  assert.equal(a.calls[1]!.init!.signal!.aborted, true);
   first.dispose?.();
   assert.equal(a.hostListeners.size, 0);
-  assert.equal(b.hostListeners.size, 1);
+  assert.equal(b.hostListeners.size, 0);
   assert.deepEqual(b.disposedServices, []);
-  a.unmount();
   second.dispose?.();
 });
 
@@ -770,6 +783,12 @@ function descendants(value: unknown): Element[] {
   if (!value || typeof value !== 'object' || !('type' in value) || !('props' in value)) return [];
   const element = value as Element;
   return [element, ...descendants(element.props.children)];
+}
+
+function fileRow(tree: Element): Element {
+  const row = descendants(tree).find(element => element.props.className === 'cf-row');
+  assert.ok(row, 'the enhancement renders a file row inside the supplied Base');
+  return row;
 }
 
 function textContent(value: unknown): string {
@@ -954,7 +973,7 @@ test('omitted and malformed blobs show unavailable cards without download or fab
     render(); h.flushEffects();
     const tree = render();
     assert.match(JSON.stringify(tree), /附件不可用/);
-    assert.equal(tree.props['aria-busy'], false);
+    assert.equal(fileRow(tree).props['aria-busy'], false);
     assert.equal(descendants(tree).some(element => ['a', 'img', 'video', 'audio'].includes(String(element.type))), false);
     assert.equal(h.calls.length, 0);
     h.unmount();
@@ -974,7 +993,7 @@ test('media loads only on opening, with a fresh bounded attempt and isolated lat
   };
   const render = () => h.render(renderNode, { node });
   render(); h.flushEffects();
-  assert.equal(render().props['aria-busy'], false);
+  assert.equal(fileRow(render()).props['aria-busy'], false);
   assert.equal(descendants(render()).some(element => element.type === 'img'), false);
   t.mock.timers.tick(10_000);
   assert.doesNotMatch(JSON.stringify(render()), /预览加载超时/);
@@ -982,24 +1001,24 @@ test('media loads only on opening, with a fresh bounded attempt and isolated lat
   render(); h.flushEffects();
   const first = render();
   const firstImage = descendants(first).find(element => element.type === 'img')!;
-  assert.equal(first.props['aria-busy'], true);
+  assert.equal(fileRow(first).props['aria-busy'], true);
   t.mock.timers.tick(4_000);
   render(); h.flushEffects();
   t.mock.timers.tick(1_001);
   const expired = render();
-  assert.equal(expired.props['aria-busy'], false);
+  assert.equal(fileRow(expired).props['aria-busy'], false);
   assert.match(JSON.stringify(expired), /预览加载超时/);
   assert.ok(descendants(expired).some(element => element.type === 'a'), 'original remains downloadable');
   (descendants(expired).find(element => element.props['aria-label'] === '重新加载 Native image')!.props.onClick as () => void)();
   render(); h.flushEffects();
   (firstImage.props.onLoad as () => void)();
   const retrying = render();
-  assert.equal(retrying.props['aria-busy'], true, 'old image cannot complete the new resource');
+  assert.equal(fileRow(retrying).props['aria-busy'], true, 'old image cannot complete the new resource');
   const nextImage = descendants(retrying).find(element => element.type === 'img')!;
   assert.equal(nextImage.props.src, firstImage.props.src, 'retry reuses available bytes, not another decode/upload');
   assert.notEqual(nextImage.props.key, firstImage.props.key);
   (nextImage.props.onLoad as () => void)();
-  assert.equal(render().props['aria-busy'], false);
+  assert.equal(fileRow(render()).props['aria-busy'], false);
   h.unmount();
   frontend.dispose?.();
 });
@@ -1083,8 +1102,8 @@ test('attachment middleware preserves unknown native values and core actions wit
     index: 0, attachment: { type: 'blob', mimeType: 'text/plain', data: 'YQ==' },
     label: 'Supported', children: 'core fallback', actions: action,
   });
-  assert.equal(tree.type, 'span');
-  assert.equal(tree.props.className, 'cf-row', 'replacement is the existing file row itself');
+  assert.equal(fileRow(tree).type, 'span');
+  assert.match(textContent(tree), /core fallback/, 'inherited content is preserved alongside the preview');
   const coreAction = descendants(tree).find(element => element.props['aria-label'] === 'core remove')!;
   assert.equal(coreAction.props.disabled, true);
   assert.equal(h.calls.length, 0);
@@ -1298,7 +1317,7 @@ test('draft and native attachments share rows and canonical URLs without backgro
   const node: NativeFixture = { kind: 'attachment', origin: { sessionId: 'fixture', messageId: 'restored' }, label: attachment.displayName, attachment };
   const chat = h.render(nativeComponent(frontend), { node });
   h.flushEffects();
-  assert.equal(chat.props.className, card.props.className);
+  assert.equal(fileRow(chat).props.className, card.props.className);
   assert.equal(descendants(chat).some(element => element.type === 'img'), false);
   assert.equal(descendants(chat).find(element => element.type === 'a')!.props.href, `${image.props.src}?download=1`);
   assert.ok(h.calls.every(call => call.init!.method === 'HEAD'));
@@ -1350,7 +1369,7 @@ test('a row opens an explicitly closable native dialog and a changed resource cl
   render(); h.flushEffects();
   (staleImage.props.onLoad as () => void)();
   tree = render();
-  assert.equal(tree.props['aria-busy'], false, 'the new resource is not loading a preview until opened');
+  assert.equal(fileRow(tree).props['aria-busy'], false, 'the new resource is not loading a preview until opened');
   assert.equal(descendants(tree).some(element => element.type === 'dialog'), false);
   assert.ok(closed >= 2);
   h.unmount();
@@ -1428,7 +1447,7 @@ test('audio/video controls stay behind an explicit play action and unsafe docume
       const players = descendants(tree).filter(element => element.props.controls === true);
       assert.equal(players.length, 1);
       (players[0]!.props.onLoadedMetadata as () => void)();
-      assert.equal(render().props['aria-busy'], false);
+      assert.equal(fileRow(render()).props['aria-busy'], false);
       (players[0]!.props.onError as () => void)();
       tree = render();
       assert.match(JSON.stringify(tree), /未能显示/);

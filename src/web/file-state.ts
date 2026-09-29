@@ -1,6 +1,6 @@
 import type { ModuleFrontendContext } from '@waksana/cockpit-module-sdk/frontend';
 import type { FileComposerContext, FileAttachment, FileDraft } from './file-draft.ts';
-import { MAX_ATTACHMENTS } from './file-draft.ts';
+import { acceptsFiles, canRemoveFile, MAX_ATTACHMENTS } from './file-draft.ts';
 import { fileRequestPath, managedFileUrl, nativeFileUrl } from '../shared/files.ts';
 
 export const DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
@@ -40,6 +40,7 @@ interface UploadScope {
   error?: string;
   owned: Map<string, { operationId: string; value?: FileAttachment['value']; attached?: boolean }>;
   unsubscribe?: () => void;
+  unresolved?: boolean;
 }
 
 interface UploadOptions {
@@ -140,6 +141,7 @@ export class UploadStore {
       scope.unsubscribe?.();
       scope.unsubscribe = undefined;
       scope.draft = draft;
+      scope.unresolved = draft.getSnapshot().pending || draft.getSnapshot().unconfirmed;
     }
     if (scope.entries.length && !scope.release) scope.release = scope.draft.block('请等待文件上传完成，或移除未完成的附件');
     if (!scope.entries.length && scope.release) {
@@ -152,9 +154,11 @@ export class UploadStore {
 
   private observe(scope: UploadScope): void {
     const snapshot = scope.draft!.getSnapshot();
-    // Native pending is synchronous, but its outcome need not be confirmed. Once
-    // exposed to a submission, an operation never becomes discardable again.
-    if (snapshot.pending) scope.owned.clear();
+    // A fresh submission revokes all crossing operations conservatively. Recovery
+    // also publishes pending, but must not consume ownership of newer uploads.
+    if (snapshot.pending && !scope.unresolved) scope.owned.clear();
+    scope.unresolved = snapshot.pending || snapshot.unconfirmed;
+    for (const id of snapshot.protectedAttachmentIds) scope.owned.delete(id);
     const present = new Map(snapshot.attachments.map(item => [item.id, item.value]));
     for (const [id, owned] of scope.owned) {
       const value = present.get(id);
@@ -171,9 +175,11 @@ export class UploadStore {
     scope.unsubscribe = undefined;
   }
 
-  private editable(scope: UploadScope, draft: FileDraft): boolean {
-    if (!draft.getSnapshot().pending && !scope.draft!.getSnapshot().pending) return true;
-    this.reject(scope, '消息正在提交，请等待回执后再修改附件。');
+  private editable(scope: UploadScope, draft: FileDraft, removingId?: string): boolean {
+    const allowed = (snapshot: ReturnType<FileDraft['getSnapshot']>) =>
+      removingId === undefined ? acceptsFiles(snapshot) : canRemoveFile(snapshot, removingId);
+    if (allowed(draft.getSnapshot()) && allowed(scope.draft!.getSnapshot())) return true;
+    this.reject(scope, '草稿不可编辑、不支持附件或提交尚未确认，请等待回执后再修改附件。');
     return false;
   }
 
@@ -181,8 +187,8 @@ export class UploadStore {
     if (this.disposed || files.length === 0) return false;
     const scope = this.bind(context.draft);
     if (!this.editable(scope, context.draft)) return false;
-    if (context.disabled || context.operation !== 'prompt') {
-      this.reject(scope, 'Files can only be attached to an available prompt.');
+    if (context.disabled || context.operation !== context.draft.purpose.kind) {
+      this.reject(scope, 'Files can only be attached to an available draft.');
       return false;
     }
     const pending = scope.entries.filter(entry => !entry.attached).length;
@@ -206,7 +212,7 @@ export class UploadStore {
     if (!scope.draft!.getSnapshot().pending) {
       for (const entry of entries) scope.owned.set(`cf-upload:${entry.id}`, { operationId: entry.id });
     }
-    // Independent of React subscriptions: switching sessions must not miss a send.
+    // Independent of React subscriptions: unmounting must not miss a submission.
     scope.unsubscribe ??= scope.draft!.subscribe(() => this.observe(scope));
     scope.error = undefined;
     this.publish(scope);
@@ -234,7 +240,7 @@ export class UploadStore {
   remove(draft: FileDraft, id: string): void {
     if (this.disposed) return;
     const scope = this.bind(draft);
-    if (!this.editable(scope, draft)) return;
+    if (!this.editable(scope, draft, `cf-upload:${id}`)) return;
     const entry = scope.entries.find(item => item.id === id && !item.attached);
     if (!entry) return;
     const owned = scope.owned.get(`cf-upload:${id}`);
@@ -250,7 +256,7 @@ export class UploadStore {
   removeAttachment(draft: FileDraft, id: string): void {
     if (this.disposed) return;
     const scope = this.bind(draft);
-    if (!this.editable(scope, draft)) return;
+    if (!this.editable(scope, draft, id)) return;
     const snapshot = draft.getSnapshot();
     const owned = scope.draft === draft && !snapshot.pending ? scope.owned.get(id) : undefined;
     try {

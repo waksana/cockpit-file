@@ -1,6 +1,7 @@
 import type { ModuleFrontendContext } from '@waksana/cockpit-module-sdk/frontend';
 import type { ClipboardEvent, DragEvent } from 'react';
 import type { FileComposerContext } from './file-draft.ts';
+import { acceptsFiles } from './file-draft.ts';
 import type { UploadStore } from './file-state.ts';
 
 interface FileInputOptions {
@@ -26,7 +27,7 @@ function transferFiles(data: DataTransfer): File[] {
     .filter((file): file is File => file !== null);
 }
 
-/** Owns native picker callbacks independently of the mounted editor or active session. */
+/** Owns native picker callbacks independently of the mounted editor. */
 export class FileInputs {
   private readonly options: FileInputOptions;
   private readonly consumed = new WeakSet<object>();
@@ -41,8 +42,8 @@ export class FileInputs {
 
   private available(target: FileComposerContext): boolean {
     return !this.disposed && !this.options.signal.aborted && this.options.enabled &&
-      !target.disabled && target.operation === 'prompt' && target.draft.purpose.kind === target.operation &&
-      !target.draft.getSnapshot().pending;
+      !target.disabled && target.draft.purpose.kind === target.operation &&
+      acceptsFiles(target.draft.getSnapshot());
   }
 
   private receive(files: readonly File[], target: FileComposerContext): void {

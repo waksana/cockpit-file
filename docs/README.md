@@ -1,11 +1,12 @@
 # Cockpit File 文档
 
-**Current source prepares File 0.2.6 for reference-scoped missing capture failures.**
+**Current source supports both native and generic owner drafts through one File enhancement chain.**
 The module ships [default instructions](../src/instructions.md) asking agents to give files as Markdown links/images.
-Package/manifest versions agree at 0.2.6; changed bytes never replace an existing 0.2.5 installation.
+Source versions stay `0.0.0-dev`; changed bytes never replace an existing installed identity.
 组件与浏览器离开保护见[前端接入契约](frontend-contract.md)。既有持久化草稿编码不变。
 
-前端使用 Web API v2、公共 UI v1 / shared-surfaces v1。尚未声明发布或部署。
+The frontend uses API v3, publicComponents v1, draftOwner v1, draftSubmission v2
+and UI/shared-surfaces v1. Publication does not mean deployment.
 The published SDK is pinned in `package.json` / `pnpm-lock.yaml`; the separate exact
 integration host is in `tooling/host-integration.json` and the [installation guide](installation.md).
 Neither SDK semver nor a successful build proves host capability or deployment.
@@ -102,8 +103,8 @@ Agent 用原生工具生成文件，正常回复 Markdown
 
 ## 5. 当前源码依据
 
-Builds use the exact published `@waksana/cockpit-module-sdk@0.2.0`, without generated
-host declarations or a host checkout. It supplies Web API v2 state, component middleware
+Builds use the exact published `@waksana/cockpit-module-sdk@0.7.0`, without generated
+host declarations or a host checkout. It supplies Web API v3 state, component middleware
 and Markdown contracts; package/backend API v1 and runtime capability checks remain.
 原生 SDK 1.0.13、bundled runtime 1.0.83 / protocol 3 不因本次 Web 迁移改变。
 详细代码接点写在前后端主题文档中；这里不以旧文件系统或旧 CI 作为本次实现完成证据。
@@ -119,7 +120,7 @@ entries, owned by Cockpit `packages/module-api`; this repository does not copy d
 
 | 项目 | 当前实现 |
 | --- | --- |
-| 注册 | 后端 activate v1 不变；Web activate v2 注册 state 服务/附件 schema、composer/原生附件 middleware 和 Markdown renderer |
+| Registration | Backend activate v1; Web activate v3 registers state services/draft schema, public component middleware and Markdown renderers |
 | 新输出 | 已加载会话的新 ephemeral start/delta 建立扫描状态；无新流的旧完整事件不捕获 |
 | 引用 | 行内 Markdown link/image；相对路径、绝对路径、本地 file URL；未知 cwd 的相对引用失败 |
 | 限制 | 有界扫描/引用数/工作队列/上传大小；数值和配置入口见安装文档 |
