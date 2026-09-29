@@ -113,7 +113,10 @@ test('isolated archive has four assets, byte-identical descriptor, source-derive
   assert.deepEqual(descriptor.product.hostApi, { min: 1, max: 1 });
   assert.deepEqual(descriptor.product.databases, []);
   assert.deepEqual(descriptor.product.migrations, []);
-  assert.ok(descriptor.product.requiresCapabilities.includes('draftSubmission.v1'));
+  assert.ok(descriptor.product.requiresCapabilities.includes('draftSubmission.v2'));
+  assert.ok(descriptor.product.requiresCapabilities.includes('frontend-api.v3'));
+  assert.ok(descriptor.product.requiresCapabilities.includes('publicComponents.v1'));
+  assert.ok(descriptor.product.requiresCapabilities.includes('draftOwner.v1'));
   assert.equal(JSON.parse(await readFile(join(f.root, 'package.json'))).version, '0.0.0-dev');
   assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: f.root, encoding: 'utf8' }), '');
   const notes = releaseNotes(event(sha), identity, files);

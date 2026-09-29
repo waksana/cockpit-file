@@ -34,9 +34,11 @@ export function createFileServices(context: ModuleFrontendContext) {
     }),
     dispose: store => store.dispose(),
   }).get();
-  const visibilityChanged = () => probes.setVisible(context.state.host.getSnapshot().visible);
+  const visibilityChanged = () => probes.setVisible(page?.visibilityState !== 'hidden');
   visibilityChanged();
-  resources.add(context.state.host.subscribe(visibilityChanged));
+  page?.addEventListener('visibilitychange', visibilityChanged);
+  const releaseVisibility = () => page?.removeEventListener('visibilitychange', visibilityChanged);
+  resources.add(releaseVisibility);
   const releaseUnload = protectUnpersistedFiles(page?.defaultView ?? undefined, uploads);
   resources.add(releaseUnload);
   let disposed = false;
@@ -45,6 +47,8 @@ export function createFileServices(context: ModuleFrontendContext) {
     disposed = true;
     releaseUnload();
     resources.delete(releaseUnload);
+    releaseVisibility();
+    resources.delete(releaseVisibility);
     inputs.dispose();
     context.signal.removeEventListener('abort', dispose);
   }

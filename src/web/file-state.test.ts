@@ -16,7 +16,8 @@ class Draft implements FileDraft {
   readonly id = crypto.randomUUID();
   readonly sessionId: string;
   readonly purpose = { kind: 'prompt' } as const;
-  snapshot: FileDraftSnapshot = { text: '', attachments: [], blocks: [], hasContent: false, revision: 0, pending: false, unconfirmed: false, retired: false };
+  snapshot: FileDraftSnapshot = { text: '', attachments: [], protectedAttachmentIds: [], blocks: [], hasContent: false, revision: 0, pending: false, unconfirmed: false, retired: false,
+    editable: true, submittable: true, capabilities: { attachments: true }, actionRevision: 0 };
   listeners = new Set<() => void>();
   blocks = 0;
   releases = 0;
@@ -43,7 +44,11 @@ class Draft implements FileDraft {
     this.emit();
   }
   editText(text: string) { this.snapshot = { ...this.snapshot, text }; this.emit(); }
-  setPending(pending: boolean) { this.snapshot = { ...this.snapshot, pending }; this.emit(); }
+  setPending(pending: boolean) {
+    this.snapshot = { ...this.snapshot, pending,
+      protectedAttachmentIds: pending ? this.snapshot.attachments.map(item => item.id) : [] };
+    this.emit();
+  }
   block() {
     this.blocks++;
     this.emit();
@@ -766,7 +771,7 @@ test('new uploads and retries are rejected during native pending but work after 
   store.receive([new File(['a'], 'a')], context);
   assert.equal(calls.length, 0, 'a stale picker/clipboard/drop context cannot start an upload');
   assert.equal(draft.blocks, 0);
-  assert.match(store.snapshot(draft).error!, /正在提交/);
+  assert.match(store.snapshot(draft).error!, /提交尚未确认/);
   draft.setPending(false);
   store.receive([new File(['a'], 'a')], context);
   calls[0]!.response.resolve(Response.json({ error: 'fixture failure' }, { status: 503 }));

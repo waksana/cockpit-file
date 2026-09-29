@@ -3,7 +3,7 @@
 ## 入口与共享服务
 
 manifest 声明 `frontend.entry/styles`（`src/web/index.tsx` 与 `src/web/styles.css`）。
-Current source prepares File 0.2.6 using the published `@waksana/cockpit-module-sdk@0.2.0`.
+Current source uses the published `@waksana/cockpit-module-sdk@0.7.0`.
 The exact integration host is recorded separately in `tooling/host-integration.json`;
 this source preparation is not a release or deployment.
 
@@ -32,13 +32,15 @@ this source preparation is not a release or deployment.
 
 ## 呈现基线
 
-**前端入口继续使用 Web API v2、公共 UI v1 与独立 shared-surfaces v1；包/后端 API v1 不变。**
+**The bundle exports `frontendApiVersion = 3` and requires Web API v3,
+publicComponents v1, draftOwner v1 and draftSubmission v2. UI/shared-surfaces v1
+and package/backend API v1 remain unchanged.**
 SDK semver is independent of host compatibility. Activation checks capabilities before registering contributions, including
 `context.uiSurfaceVersion === 1`；缺少或不支持时明确拒绝。
 预览原生 dialog 使用 `ck-surface ck-modal`，标题与动作使用 `ck-heading` / `ck-actions`。
 文件行、内联引用、媒体尺寸、portal、打开/关闭与焦点仍由原有模块代码负责。
 Public frontend types come from `@waksana/cockpit-module-sdk/frontend`; the entry remains `activate(context)`.
-前端 context 和返回声明均为 API v2，显式校验公共 UI v1 与 `context.createPortal`；
+Both the frontend context and activation result declare API v3; activation also checks UI v1 and `context.createPortal`.
 公共 CSS/图标/兼容规范只在宿主
 [模块 UI 开发指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md) 维护。
 不可变 SDK 基线与配套交付前置条件见[安装指南](installation.md)。
@@ -93,11 +95,12 @@ Public frontend types come from `@waksana/cockpit-module-sdk/frontend`; the entr
 当前注册方式：
 
 ```text
-activate(context.apiVersion === 2)
+export frontendApiVersion = 3
+activate(context.apiVersion === 3)
   context.state.registerDraft({ id, purposes, create, validate,
     hasContent, project, acknowledge, persistence })
   context.state.register({ id, create, dispose })
-  返回 apiVersion: 2
+  return apiVersion: 3
   components: composer / composerEditor / attachment middleware
   markdown: link / image renderer
 ```
@@ -116,8 +119,10 @@ state 注册返回保留具体服务方法的 handle；每个模块激活创建�
 基础 draft 不含附件字段；文件模块通过自己的 schema 和服务渲染完整附件列表，
 包括就绪和未完成项，在同一列表中保持原行高、间距和顺序。
 列表通过 Composer 的普通 children 组合，不读取宿主预建附件组或隐藏标志。
-模块/schema 不可用时，本体不显示文件兜底列表、不增加文件恢复阻止，也不提交这些字段；
-普通文字仍可发送。不透明的已序列化 namespace 可保留，不能当成已发送或已删除。
+When a schema is unavailable, the host renders no invented File fallback store.
+Unclaimed persisted fields block the entire submission rather than degrading it
+to text-only. Drafts without retained fields can still submit ordinary text.
+Opaque saved namespaces are not evidence of sending or deletion.
 上传入口直接使用宿主公共图标按钮类，保留 tooltip、可访问名称、
 键盘焦点和真实禁用状态；不重复基础按钮 CSS，也不依赖本体私有 DOM、store 或旧上传实现。
 展示形态只按已有的输入来源决定，不检查文本前后换行、不查询私有 DOM、不根据文件是否 ready 切换：
@@ -165,6 +170,44 @@ Markdown 引用使用带真实资源 href 的 `a`，继承正文的字号和行�
 ## 3. 可接收的上下文
 
 本体提供绑定生命周期的只读上下文：
+
+### Generic owner drafts
+
+File never selects Chat, Assistant, a session or a business target. Both consumers
+use the same `composer`, `composerEditor` and `attachment` enhancements. Services
+key by the host-issued draft lifetime, not `sessionId`; no session is fabricated.
+The composer/editor wrappers retain Base, children, editor refs and inherited DOM
+handlers. Supported attachment previews extend Base and retain inherited content
+and actions; unsupported descriptions pass through unchanged.
+
+New picker/paste/drop operations and retries require owner `editable`, attachment
+capability, a live lifetime and no pending send, as well as the consumer's disabled
+gate. A prompt purpose alone is not permission. Native ask/choice/plan/elicitation
+drafts remain unsupported and show a disabled upload control. A captured picker
+rechecks that same draft; it never follows the newly visible editor. An already
+started upload may finish in its original inactive but still authorized draft.
+If authority is lost, the saved upload remains an explicit insertion failure;
+retry uses that result without uploading it again.
+
+View unmount is not retirement. Uploads and blockers survive view changes;
+actual module revocation aborts requests, closes pickers and revokes object URLs.
+Probes use document visibility and their existing mounted-preview subscriptions,
+not `state.host.visible`, new global DOM scans or another polling loop.
+
+Only native attachment `value` is projected; preview URLs never become submitted
+attachments. The host owns persistent request/receipt/checkpoints and recovery
+settlement. The unchanged version-1 File encoding contains stable item IDs and
+revision tokens. ACK compares captured/current ID, revision and value, so it is
+idempotent across restoration and never clears later additions/replacements.
+File never implements its own submit, receipt inspection or ACK authority.
+
+Pending captures lose upload-discard eligibility. Unknown or accepted-but-unsettled
+captures remain protected against removal/DELETE until host settlement; new items
+remain independently removable. The removal guard observes host transaction state
+and item revisions only. On restoration, where the public API does not expose
+captured fields, it conservatively protects all restored items while unresolved.
+Host ACK removes only captured fields, never server file entities. Module loss or
+a new schema generation cannot revive an old ACK callback.
 
 | 场景 | 必需信息 |
 | --- | --- |
@@ -275,13 +318,14 @@ project 显式生成原生 `{ attachments: values }`，不把模块 UI 身份、
 显式移除先立即更新草稿/取消当前上传并释放相应阻止，不等待网络删除。
 就绪附件通过文件模块自己的 schema action 从捕获草稿移除，成功后才按原有资格执行丢弃。
 不通过附件消失推断用户点击，也不解析宿主按钮的 React/DOM 内部结构。
-仅本次 UploadStore 激活自己发起、从未暴露给原生 pending 提交的上传操作有资格
+Only uploads created by this UploadStore activation and never captured by a submission may
 调用 `DELETE /uploads/:operationId`；该调用只接受 204 成功，其余响应或网络失败通过
 `context.report` 报告，不撤销用户的草稿移除。此处是“丢弃本标签页尚未使用的上传”，
 不是通用引用计数或垃圾回收系统。
 资格独立于排序条目保存在有界内存映射中，不持久化、不保留成功上传的 File。
-对捕获的 draft.subscribe 的观察独立于组件挂载；只要看到 pending，
-已有/进行中的上传即永久失去删除资格。pending 期间不接纳新上传、移除或重试，
+The captured draft subscription is independent of component mounting. Captured
+items permanently lose discard eligibility; a reconciliation's pending state
+does not capture newer uploads. During pending, new input, removal and retries are disabled.
 上传按钮、文件选择器和所有移除/重试按钮置灰；延迟的选择器和拖放/粘贴事件也不能绕过。
 收到回执后恢复附件操作，不等待 Agent 回合结束；文字编辑不受影响。
 移除时同步再检查 pending，不以未确认原生提交的结束或失败恢复资格。

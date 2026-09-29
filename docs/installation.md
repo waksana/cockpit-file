@@ -2,39 +2,38 @@
 
 ## 集成状态
 
-Current source prepares File **0.2.6** for reference-scoped missing capture failures.
-The manifest declares default `instructions`; hosts that predate this field (including 0.3.0) reject the module.
-The build dependency is the published **`@waksana/cockpit-module-sdk@0.2.0`** from
+Current source stays at **0.0.0-dev**; normal main merges attempt an immutable
+Rolling Release. See [the release guide](releases.md) for the four verified assets.
+The build dependency is the published **`@waksana/cockpit-module-sdk@0.7.0`** from
 `https://npm.pkg.github.com`, pinned exactly in `package.json` and `pnpm-lock.yaml`.
-The integration host is mainline commit `7d69b6f348e17f098bc5562fdbec317e8e2e4ba6`,
+The integration host is mainline commit `0dcfd6688b4c01b3f29776ee804b901612a6ae9b`,
 recorded separately in [`tooling/host-integration.json`](../tooling/host-integration.json).
 It is not required to build or package the module. SDK and host versions are independent.
-Package/manifest metadata agree at the fresh patch identity 0.2.6. This preparation
-does not publish, install, deploy or restart anything; changed package bytes must
-not replace the historical 0.2.5 identity.
+Builds and release publication never install, deploy or restart anything.
+Changed package bytes must not replace an existing installed identity.
 
 构建输出 `dist/web/index.js` / `styles.css`，位于已有公开 asset 根。
 模块只打包自身逻辑和布局样式，公共组件和主题由宿主提供；既有草稿编码不变。
 
-前端入口要求 Web API v2、公共 UI v1、
-`context.uiSurfaceVersion === 1` 与 `context.createPortal`，激活前缺少任一能力均拒绝。
+The frontend requires Web API v3, publicComponents v1, draftOwner v1,
+draftSubmission v2, UI v1, `context.uiSurfaceVersion === 1` and
+`context.createPortal`; missing capabilities fail before activation.
 模块包和后端 API 仍为 v1，后端行为没有随本次 Web 迁移改变。
-前端 context/返回声明必须是 API v2；不能仅凭宿主版本号或后端 API v1 推断支持。
+The bundle exports `frontendApiVersion = 3`; context/result both declare API v3.
+Neither a host version nor backend API v1 implies frontend compatibility.
 公共规则见宿主[模块 UI 指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md)。
 Frontend types come from the published SDK `/frontend` entry, backend contracts from
 `/backend`, and shared wire types from the root. Runtime-only constants use `/runtime`;
 this module currently needs no runtime SDK import.
-旧 Web 插口不保留兼容层，宿主与两个迁移模块须配套升级后冷启动；
-不能先运行新宿主却期待旧模块前端继续兼容。CI 不执行安装、部署或重启。
+Legacy frontend compatibility belongs to the host. This module uses only the new
+enhancement chain and never fabricates a native session. CI performs isolated
+integration checks, not production installation, deployment or restart.
 已发行 0.1.6 的使用方法和兼容条件见其 tag 文档，不把本开发分支当成已发布资产。
 
-After [v0.2.6 Release](https://github.com/waksana/cockpit-file/releases/tag/v0.2.6)
-is published, download `cockpit-file-0.2.6.tgz` and
-`cockpit-file-0.2.6.tgz.sha256`, then run
-`sha256sum -c cockpit-file-0.2.6.tgz.sha256` before installation.
-Before publication, an explicitly authorized joint deployment uses the unchanged
-successful CI archive for the exact merged main commit. An older package is not
-a substitute for this version, and a CI archive is not a published Release.
+Download a compatible verified Rolling archive and its checksum from
+[Releases](https://github.com/waksana/cockpit-file/releases). Check both archive
+and deployment descriptor checksums before any separately authorized installation.
+A CI archive is not a published Release, and an older API-v2 package is not this migration.
 Source code ZIP/tar is not an installable module archive. Only source development needs the registry install and build steps below.
 
 安装前了解[复制标签页与删除的已知限制](release-notes.md#known-limitation)：

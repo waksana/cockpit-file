@@ -7,13 +7,16 @@ import { isLocalFileReference, messageFileUrl, nativeFileUrl } from '../shared/f
 import { formatBytes, previewKind } from './file-state.ts';
 import { decodeNativeBlob, unavailableBlobReason, type NativeBlob } from './blob.ts';
 import { icons } from './icons.ts';
-import { type FileComposerContext, type FileDraft } from './file-draft.ts';
+import { acceptsFiles, canRemoveFile, type FileComposerContext, type FileDraft } from './file-draft.ts';
 import { createFileServices } from './file-services.ts';
 
+export const frontendApiVersion = 3;
+
 export const activate: ActivateFrontend = context => {
-  if (context.apiVersion !== 2 || context.uiVersion !== 1 || context.uiSurfaceVersion !== 1 || typeof context.createPortal !== 'function' ||
+  if (context.apiVersion !== 3 || context.publicComponentsVersion !== 1 || context.draftOwnerVersion !== 1 ||
+      context.draftSubmissionVersion !== 2 || context.uiVersion !== 1 || context.uiSurfaceVersion !== 1 || typeof context.createPortal !== 'function' ||
       typeof context.state?.registerDraft !== 'function') {
-    throw new Error('Cockpit File requires frontend API v2, Module UI v1, uiSurfaceVersion v1, context.state.registerDraft and context.createPortal; upgrade the paired host first.');
+    throw new Error('Cockpit File requires frontend API v3, publicComponents v1, draftOwner v1, draftSubmission v2, Module UI v1, uiSurfaceVersion v1, context.state.registerDraft and context.createPortal; upgrade the paired host first.');
   }
   const createPortal = context.createPortal;
   const React = context.react;
@@ -47,12 +50,12 @@ export const activate: ActivateFrontend = context => {
 
   function UploadAction(composer: FileComposerContext) {
     const draft = useDraft(composer.draft);
-    const disabled = composer.disabled || draft.pending || composer.operation !== 'prompt' || !nativePathPrefix || context.signal.aborted;
+    const disabled = composer.disabled || !acceptsFiles(draft) || !nativePathPrefix || context.signal.aborted;
     return <button
         type="button"
         className="ck-icon-button"
         disabled={disabled}
-        title={composer.operation === 'prompt' ? `添加文件（单个最多 ${formatBytes(maxBytes)}）` : '当前操作不接受附件'}
+        title={draft.capabilities.attachments ? `添加文件（单个最多 ${formatBytes(maxBytes)}）` : '当前操作不接受附件'}
         aria-label="添加文件"
         onClick={() => { if (!disabled && !services.disposed) inputs.pick(composer); }}
       >
@@ -89,7 +92,7 @@ export const activate: ActivateFrontend = context => {
       React.useCallback(() => composer.draft.getSnapshot(), [composer.draft]),
     );
     const pending = useUploads(composer.draft);
-    const disabled = composer.disabled || draft.pending;
+    const disabled = composer.disabled || !acceptsFiles(draft);
     const ready = draft.attachments;
     if (!ready.length && !pending.items.length && !pending.error) return null;
     return <section className="cf-attachments" aria-label="文件附件">
@@ -97,9 +100,9 @@ export const activate: ActivateFrontend = context => {
       {(ready.length > 0 || pending.items.length > 0) && <ul className="cf-attachment-list">
         {ready.map(item => {
           const name = item.value.displayName || '附件';
-          const actions = <button type="button" className="ck-icon-button ck-danger" disabled={disabled} title="移除"
+          const actions = <button type="button" className="ck-icon-button ck-danger" disabled={disabled || !canRemoveFile(draft, item.id)} title="移除"
             onClick={() => uploads.removeAttachment(composer.draft, item.id)} aria-label={`移除 ${name}`}><ActionIcon name="remove" /></button>;
-          const status = draft.pending ? '正在提交' : '准备就绪';
+          const status = draft.pending ? '正在提交' : draft.unconfirmed ? '提交尚未确认，附件已保留' : '准备就绪';
           const url = item.value.type === 'file' ? nativeFileUrl(item.value.path, nativePathPrefix, context.apiBase) : null;
           return <li className="cf-attachment" key={item.id}>
             {url ? <FileCard url={url} name={name} actions={actions} status={status} download={false} />
@@ -110,7 +113,7 @@ export const activate: ActivateFrontend = context => {
         })}
         {pending.items.map(item => {
           const retry = item.status === 'failed' ? <button type="button" className="ck-icon-button" title="重试上传"
-            disabled={disabled || composer.operation !== 'prompt'}
+            disabled={composer.disabled || !acceptsFiles(draft)}
             onClick={() => uploads.retry(composer.draft, item.id)} aria-label={`重新上传 ${item.name}`}><ActionIcon name="retry" /></button> : undefined;
           const actions = <button type="button" className="ck-icon-button ck-danger" disabled={disabled} title="移除"
             onClick={() => uploads.remove(composer.draft, item.id)} aria-label={`移除 ${item.name}`}><ActionIcon name="remove" /></button>;
@@ -416,7 +419,7 @@ export const activate: ActivateFrontend = context => {
   }
 
   const frontend: ModuleFrontend = {
-    apiVersion: 2,
+    apiVersion: 3,
     components: [{
       id: 'file-composer',
       boundary: 'composer',
@@ -432,10 +435,9 @@ export const activate: ActivateFrontend = context => {
       boundary: 'composerEditor',
       wrap: Base => function FileEditor(props) {
         if (services.disposed) return <Base {...props} />;
-        if (props.operation !== 'prompt') return <Base {...props}
-          children={<>{props.children}<DisabledUploadAction /></>} />;
         const draft = fileDrafts.get(props.draft);
-        if (!draft) return <Base {...props} />;
+        if (!draft) return <Base {...props}
+          children={<>{props.children}<DisabledUploadAction /></>} />;
         const composer: FileComposerContext = { draft, operation: props.operation, disabled: props.disabled };
         return <Base {...props}
           children={<>{props.children}<UploadAction {...composer} /></>}
@@ -450,7 +452,10 @@ export const activate: ActivateFrontend = context => {
         const url = props.attachment.type === 'file'
           ? nativeFileUrl(props.attachment.path, nativePathPrefix, context.apiBase) : null;
         if (services.disposed || (props.attachment.type !== 'blob' && !url)) return <Base {...props} />;
-        return <AttachmentCard {...props} url={url ?? undefined} />;
+        return <Base {...props}>
+          {props.children}
+          <AttachmentCard {...props} actions={undefined} url={url ?? undefined} />
+        </Base>;
       },
     }],
     markdown: [{

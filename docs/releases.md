@@ -48,8 +48,9 @@ changes, not independent publisher signatures.
 The format-2 descriptor declares channel `rolling`, repository, source SHA, tag,
 version, sequence and archive name. `scripts/rolling-identity.mjs` derives the module
 API range from the manifest and checks the actual frontend/draft/storage contracts.
-File requires backend/module API 1, frontend API 2, UI/surface 1, composer input,
-draft lifecycle and draft submission capabilities. It invokes no host intents.
+File requires backend/module API 1, frontend API 3, UI/surface 1, composer input 1,
+draft lifecycle 1, draft submission 2, public components 1 and draft owner 1
+capabilities. It invokes no host intents.
 Storage is ordinary file bodies with version-2 metadata, not SQLite: databases and
 migrations are empty. This does not authorize deletion, recapture, migration or
 weakening retention of existing snapshots and drafts. Changes to these contracts

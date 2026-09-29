@@ -1,11 +1,21 @@
 # Cockpit File 0.0.0-dev
 
+- Use published SDK 0.7.0 and frontend API v3 with publicComponents v1,
+  draftOwner v1 and draftSubmission v2. The integration host is pinned to
+  `0dcfd6688b4c01b3f29776ee804b901612a6ae9b`.
+- Share one File enhancement chain across native and generic owner drafts.
+  Respect owner edit/attachment capabilities, retain captured upload lifetimes,
+  preserve Base content/actions, and probe mounted previews independently of
+  background Chat visibility.
+- Protect unresolved captured attachments from removal/discard, including restored
+  and accepted-but-unsettled submissions. Host recovery owns ACK using the existing
+  persistent File item identities/revisions. No file storage migration occurs.
 - Every merged main PR now independently attempts its exact-SHA Rolling Release.
   Versions are injected only into isolated build/package output; source stays dev.
 - Publish four verified assets with a source-derived format-2 deployment descriptor.
   Explicit Milestone promotion edits only the existing Release's channel/Latest.
-- Runtime development identity is `dev+<shortSHA>`. Existing file snapshots, draft
-  data, SDK dependency and integration-host pin are unchanged; no migration occurs.
+- Runtime development identity is `dev+<shortSHA>`. Existing file snapshots and
+  draft encoding are unchanged; no deployment is performed by these workflows.
 
 See [the release guide](releases.md). Historical release statements below describe
 their original delivery model, not the new Rolling workflow.

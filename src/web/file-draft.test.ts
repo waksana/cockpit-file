@@ -9,6 +9,7 @@ import type { FileState } from './file-draft.ts';
 
 function base(purpose: DraftPurpose = { kind: 'prompt' }, sessionId = 'fixture-session') {
   let snapshot: ModuleDraftSnapshot = Object.freeze({
+    editable: true, submittable: true, capabilities: { attachments: purpose.kind === 'prompt' }, actionRevision: 0,
     text: '', blocks: [], revision: 0, hasContent: false, pending: false, unconfirmed: false, retired: false,
   });
   const listeners = new Set<() => void>();
@@ -70,6 +71,7 @@ function harness(existing: ReturnType<typeof base>[] = []) {
     });
   };
   const state: ModuleStateRegistry = {
+    createDraft() { assert.fail('File enhances owner drafts; it does not create them'); },
     chatWindow: { getSnapshot() { assert.fail('File does not read chat windows'); }, subscribe() { assert.fail('File does not subscribe to chat windows'); } },
     host: { getSnapshot: () => ({ sessionId: null, visible: true, connected: true }), subscribe: () => () => {} },
     registerDraft(definition) {
@@ -173,7 +175,7 @@ test('ACK preserves concurrent additions and replacements including the same ID 
   const send = submission(prompt.reference);
   prompt.change({ pending: true });
   draft.appendAttachments([attachment('same'), attachment('added')]);
-  assert.throws(() => draft.removeAttachment('same'), /正在提交/);
+  assert.throws(() => draft.removeAttachment('same'), /提交尚未确认/);
   scope.update(current => fileDraftSchema.acknowledge(current, captured, send));
   assert.deepEqual(draft.getSnapshot().attachments.map(item => item.id), ['same', 'added']);
   assert.deepEqual(captured.attachments.map(item => item.id), ['same', 'unchanged']);
