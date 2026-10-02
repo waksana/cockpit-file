@@ -5,6 +5,11 @@ const storedBody = /^body(?:\.[a-z0-9]{1,16})?$/;
 const controls = /[\u0000-\u001f\u007f]/;
 const maxReferenceLength = 16_384;
 
+export const RELOADABLE_FAILURES = new Set([
+  'SOURCE_NOT_FOUND', 'SOURCE_UNREADABLE', 'INVALID_SOURCE', 'LIMIT_EXCEEDED',
+  'SOURCE_CHANGED', 'AMBIGUOUS_SOURCE', 'ABORTED',
+]);
+
 export function isFileId(value: string): boolean {
   return opaqueId.test(value);
 }

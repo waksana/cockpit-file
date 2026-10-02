@@ -1174,6 +1174,23 @@ test('explicit synchronization coalesces clicks, posts only identity, and rechec
   probes.dispose();
 });
 
+test('synchronization eligibility comes from explicit capture headers, not generic failures or pending timeouts', async () => {
+  for (const [status, state, code, eligible] of [
+    [404, 'missing', '', true], [422, 'failed', 'SOURCE_UNREADABLE', true],
+    [422, 'failed', 'IO_ERROR', false], [422, 'failed', 'INTERRUPTED', false],
+    [202, 'pending', '', false], [404, '', '', false], [403, '', '', false],
+  ] as const) {
+    const clock = new Clock();
+    const probes = new FileProbes(async () => new Response(null, { status,
+      headers: { 'X-File-State': state, 'X-File-Error-Code': code } }), apiBase, clock);
+    probes.subscribe(fileUrl, () => {});
+    await settle(); await clock.advance(5_000);
+    assert.equal(probes.snapshot(fileUrl).status, 'unavailable');
+    assert.equal(probes.snapshot(fileUrl).canSynchronize, eligible);
+    probes.dispose();
+  }
+});
+
 test('unknown synchronization responses retain operation identity and never retry automatically', async () => {
   const url = `${apiBase}/messages/synthetic`;
   const ids: string[] = [];
@@ -1268,7 +1285,7 @@ test('network errors preserve full details and require explicit retry to clear t
   await settle();
   assert.equal(requests, 2);
   assert.deepEqual(probes.snapshot(fileUrl), {
-    status: 'ready', round: 1, deadline: 15_000, mime: 'application/octet-stream',
+    status: 'ready', round: 1, deadline: 15_000, mime: 'application/octet-stream', canSynchronize: false,
   });
   assert.equal(clock.tasks.size, 0);
   probes.dispose();
@@ -1295,7 +1312,7 @@ test('HEAD 200 finishes media and ordinary metadata checks without reading bodie
     await settle();
     const snapshot = probes.snapshot(fileUrl);
     assert.deepEqual(snapshot, {
-      status: 'ready', round: 0, deadline: 5_000, mime, size: 2048,
+      status: 'ready', round: 0, deadline: 5_000, mime, size: 2048, canSynchronize: false,
     });
     assert.equal(clock.tasks.size, 0, 'HEAD success clears the deadline even for previewable MIME types');
     await clock.advance(10_000);
@@ -1400,7 +1417,7 @@ test('late aborted results cannot overwrite a resumed or explicitly retried HEAD
       assert.equal(calls[1]!.signal.aborted, false);
       calls[1]!.response.resolve(new Response(null, { headers: { 'content-type': 'text/plain' } }));
       await settle();
-      assert.deepEqual(probes.snapshot(fileUrl), { ...snapshot, status: 'ready', mime: 'text/plain' });
+      assert.deepEqual(probes.snapshot(fileUrl), { ...snapshot, status: 'ready', mime: 'text/plain', canSynchronize: false });
       assert.equal(clock.tasks.size, 0);
       await clock.advance(10_000);
       assert.equal(calls.length, 2);

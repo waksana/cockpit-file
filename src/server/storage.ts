@@ -6,6 +6,7 @@ import type { BigIntStats } from 'node:fs';
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import type { ModuleHostIntentResult } from '@waksana/cockpit-module-sdk/backend';
+import { RELOADABLE_FAILURES } from '../shared/files.ts';
 
 export const DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
 const BLOCK_BYTES = 64 * 1024;
@@ -95,9 +96,6 @@ type DiskMetadata = Omit<FileMetadata, 'path'> & { body: string; bodyStamp: Body
 type State = { state: 'pending'; owner: OperationOwner } | { state: 'failed'; error: StoredFailure };
 type Discard = { version: 1; id: string; owner: OperationOwner };
 type CaptureSource = { paths: readonly string[]; reloadId?: string };
-const RELOADABLE_FAILURES = new Set(['SOURCE_NOT_FOUND', 'SOURCE_UNREADABLE', 'INVALID_SOURCE',
-  'LIMIT_EXCEEDED', 'SOURCE_CHANGED', 'AMBIGUOUS_SOURCE', 'ABORTED']);
-
 export const WSL2_GUIDE_URL = 'https://github.com/waksana/cockpit/blob/main/docs/install.md#windows-wsl2';
 
 export function unsupportedPlatformMessage(platform: string): string {

@@ -152,7 +152,10 @@ delta 丢失或中途改写的链接属于 best-effort 边界；新消息的完�
 
 ### Explicit synchronization
 
-A failed local message reference has an adjacent reload button. Clicking it sends
+A confirmed missing or eligible failed local message reference has an adjacent reload button.
+Network, authorization and unconfirmed probe timeouts retain a read-only preview retry.
+The detail dialog keeps that read-only retry even when synchronization is available.
+Clicking synchronization sends
 `POST /messages/<encodedReference>` with only `{ "operationId": "<UUID>" }`.
 The Host's current module digest and normal access protection apply. Rendering,
 GET/HEAD, reopening history and restarting the module never initiate this action.
@@ -167,6 +170,8 @@ budget explicitly fails instead of scanning all history.
 The selected message has a separate 256 KiB parsing limit. Authorization uses
 CommonMark/GFM AST link/image nodes, not the best-effort live streaming scanner;
 quoted/list-nested code and raw HTML cannot authorize a source read.
+Reference-style links/images resolve through their first matching definition, as
+in the Host; an unused definition alone never authorizes synchronization.
 
 Absolute local paths and local `file:` URLs identify their own source. Ordinary
 relative paths require a preceding root native `session.start` or

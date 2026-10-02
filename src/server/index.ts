@@ -270,7 +270,7 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
       } };
       if (result.state === 'failed') return { status: 422, headers: {
         'Cache-Control': 'no-store', 'X-File-State': 'failed',
-        ...(result.error.code === 'SOURCE_NOT_FOUND' ? { 'X-File-Error-Code': 'SOURCE_NOT_FOUND' } : {}),
+        'X-File-Error-Code': result.error.code,
       }, body: head ? undefined : { code: result.error.code, error: result.error.message } };
       const headers = fileHeaders(result.file, request.query.download === '1');
       if (head) return { headers };

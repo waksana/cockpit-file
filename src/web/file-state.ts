@@ -1,7 +1,7 @@
 import type { ModuleFrontendContext } from '@waksana/cockpit-module-sdk/frontend';
 import type { FileComposerContext, FileAttachment, FileDraft } from './file-draft.ts';
 import { acceptsFiles, canRemoveFile, MAX_ATTACHMENTS } from './file-draft.ts';
-import { fileRequestPath, managedFileUrl, nativeFileUrl } from '../shared/files.ts';
+import { fileRequestPath, managedFileUrl, nativeFileUrl, RELOADABLE_FAILURES } from '../shared/files.ts';
 
 export const DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
 
@@ -454,6 +454,7 @@ export interface ProbeSnapshot {
   readonly size?: number;
   readonly error?: string;
   readonly synchronizing?: boolean;
+  readonly canSynchronize?: boolean;
   readonly synchronizationNote?: string;
   readonly failure?: { kind: 'timeout' } | { kind: 'network' }
     | { kind: 'http'; status: number; code?: 'SOURCE_NOT_FOUND' };
@@ -572,9 +573,8 @@ export class FileProbes {
         const code = payload && typeof payload === 'object' && 'code' in payload ? payload.code : undefined;
         const detail = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string' ? payload.error : '';
         // Definitive failures allow a new explicit attempt. Unknown responses retain the same ID.
-        if (typeof code === 'string' && ['SOURCE_NOT_FOUND', 'SOURCE_UNREADABLE', 'INVALID_SOURCE', 'LIMIT_EXCEEDED',
-          'SOURCE_CHANGED', 'AMBIGUOUS_SOURCE', 'ABORTED', 'REFERENCE_MISMATCH', 'RELOAD_REPLAY',
-          'CONTEXT_UNAVAILABLE', 'HISTORY_LIMIT'].includes(code)) entry.reloadId = undefined;
+        if (typeof code === 'string' && (RELOADABLE_FAILURES.has(code) ||
+          ['REFERENCE_MISMATCH', 'RELOAD_REPLAY', 'CONTEXT_UNAVAILABLE', 'HISTORY_LIMIT'].includes(code))) entry.reloadId = undefined;
         throw new Error(`同步未完成 (${response.status})${detail ? `：${detail}` : '，结果未知；再次点击只核对同一次操作'}`);
       }
       entry.reloadId = undefined;
@@ -634,6 +634,10 @@ export class FileProbes {
       });
       if (controller.signal.aborted || !this.active(entry) || entry.controller !== controller) return;
       entry.controller = undefined;
+      entry.snapshot = { ...entry.snapshot, canSynchronize:
+        (response.status === 404 && response.headers.get('x-file-state') === 'missing') ||
+        (response.status === 422 && response.headers.get('x-file-state') === 'failed' &&
+          RELOADABLE_FAILURES.has(response.headers.get('x-file-error-code') ?? '')) };
       if (this.clock.now() >= entry.snapshot.deadline) {
         this.expire(entry);
         return;
@@ -665,6 +669,7 @@ export class FileProbes {
     } catch (error) {
       if (controller.signal.aborted || !this.active(entry) || entry.controller !== controller) return;
       entry.controller = undefined;
+      entry.snapshot = { ...entry.snapshot, canSynchronize: false };
       this.fail(entry, `File status check failed: ${message(error)}`, { kind: 'network' });
     }
   }

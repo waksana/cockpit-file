@@ -339,7 +339,7 @@ export const activate: ActivateFrontend = context => {
         : state.failure?.kind === 'http' && state.failure.code === 'SOURCE_NOT_FOUND' ? '源文件不存在'
           : state.failure?.kind === 'http' && [401, 403].includes(state.failure.status) ? '无访问权限'
             : state.failure?.kind === 'http' && state.failure.status === 422 ? '捕获失败' : '检查失败';
-    const synchronize = reloadable && (state.status === 'unavailable' || state.synchronizing) &&
+    const synchronize = reloadable && ((state.status === 'unavailable' && state.canSynchronize) || state.synchronizing) &&
       <button type="button" className="ck-icon-button" disabled={state.synchronizing}
         title="重新处理：保存源文件现在的内容，不覆盖已有快照"
         aria-label={`同步文件 ${name}`} onClick={() => { void probes.synchronize(url); }}>
@@ -354,9 +354,10 @@ export const activate: ActivateFrontend = context => {
       preview={state.status === 'ready' && kind ? {
         url, key: `${url}:${state.round}`, kind,
       } : undefined}
-      retry={retry ?? (synchronize || (state.status === 'unavailable' &&
+      retry={retry ?? (state.status === 'unavailable' && <>
+          {synchronize}
           <button type="button" className="ck-icon-button" title="重试预览" onClick={() => probes.retry(url)}
-            aria-label={`重新加载 ${name}`}><ActionIcon name="retry" /></button>))}
+            aria-label={`重新加载 ${name}`}><ActionIcon name="retry" /></button></>)}
       downloadUrl={download && state.status === 'ready' ? `${url}?download=1` : undefined}
       actions={actions} />;
   }

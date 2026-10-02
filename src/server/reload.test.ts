@@ -72,6 +72,14 @@ test('reload rejects forged identity, exact-target mismatch, code, user text, ex
     assert.equal((await reloadSource(history([[message(text)]]).host, encode('/synthetic/file'),
       new AbortController().signal)).path, '/synthetic/file');
   }
+  for (const text of ['[report][R]\n\n[r]: /synthetic/file', '![image][r]\n\n[r]: /synthetic/file']) {
+    assert.equal((await reloadSource(history([[message(text)]]).host, encode('/synthetic/file'),
+      new AbortController().signal)).path, '/synthetic/file');
+  }
+  for (const text of ['[r]: /synthetic/file', '[report][r]\n\n[r]: /other\n[r]: /synthetic/file']) {
+    await assert.rejects(reloadSource(history([[message(text)]]).host, encode('/synthetic/file'),
+      new AbortController().signal), /exact local reference/);
+  }
 });
 
 test('relative paths use preceding native root context, never current cwd or guessed SDK workspace', async () => {

@@ -238,7 +238,7 @@ test('capture permission, storage and failure-persistence errors still report to
       await f.event('assistant.message_delta', 'operational', { deltaContent: '[file](./source.txt)' });
       const head = await f.settled(() => f.messageHead('operational', './source.txt'));
       assert.equal(head.status, 422);
-      assert.equal(head.headers?.['X-File-Error-Code'], undefined);
+      assert.equal(head.headers?.['X-File-Error-Code'], code === 'STATE_UNCERTAIN' ? 'INTERRUPTED' : code);
       const error = await f.reported();
       await f.module.dispose?.();
       assert.equal(f.errors.length, 1);

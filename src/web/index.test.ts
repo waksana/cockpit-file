@@ -1651,7 +1651,7 @@ test('Markdown links and images stay inline regardless of labels, line breaks or
   }
 });
 
-test('inline errors retain one link and expose an adjacent explicit synchronization button', async t => {
+test('unknown inline errors retain read-only retry without offering source synchronization', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100 });
   const h = harness();
   const frontend = await activate(h.context);
@@ -1663,13 +1663,13 @@ test('inline errors retain one link and expose an adjacent explicit synchronizat
   const failed = render();
   assert.equal(failed.props.className, 'cf-reference');
   assert.equal(descendants(failed).filter(element => element.type === 'a').length, 1);
-  assert.ok(descendants(failed).some(element => element.props['aria-label'] === '同步文件 Same name'));
+  assert.equal(descendants(failed).some(element => element.props['aria-label'] === '同步文件 Same name'), false);
   const link = descendants(failed).find(element => element.type === 'a')!;
   assert.match(String(link.props['aria-description']), /availability is still unknown/);
   openFile(failed);
   const dialog = descendants(render()).find(element => element.type === 'dialog')!;
   assert.match(JSON.stringify(dialog), /availability is still unknown/);
-  assert.ok(descendants(dialog).some(element => element.props['aria-label'] === '同步文件 Same name'));
+  assert.ok(descendants(dialog).some(element => element.props['aria-label'] === '重新加载 Same name'));
   h.unmount(); frontend.dispose?.();
 });
 
@@ -1687,6 +1687,7 @@ test('missing-source details stay on the affected reference without reporting mo
   const render = () => h.render(frontend.markdown![0]!.component, { node, fallback: 'safe fallback' });
   render(); h.flushEffects(); await settle();
   let tree = render();
+  assert.ok(descendants(tree).some(element => element.props['aria-label'] === '同步文件 Missing file'));
   const trigger = descendants(tree).find(element => element.props['aria-haspopup'] === 'dialog')!;
   assert.match(String(trigger.props['aria-description']), /source file was not found during capture/);
   openFile(tree);
@@ -1696,11 +1697,34 @@ test('missing-source details stay on the affected reference without reporting mo
   assert.match(textContent(dialog), /Reload explicitly synchronizes the current source/);
   assert.equal(descendants(dialog).some(element => ['a', 'img', 'video', 'audio'].includes(String(element.type))), false);
   const retry = descendants(dialog).find(element => element.props.className === 'cf-dialog-retry')!;
+  assert.ok(descendants(retry).some(element => element.props['aria-label'] === '重新加载 Missing file'));
   click(descendants(retry).find(element => element.type === 'button')!);
   await settle();
   assert.equal(h.calls.length, 2);
   assert.deepEqual(h.calls.map(call => call.init?.method), ['HEAD', 'POST']);
   assert.deepEqual(h.errors, []);
+  h.unmount(); frontend.dispose?.();
+});
+
+test('a saved reference with a transient HEAD failure recovers without history or synchronization', async () => {
+  const h = harness();
+  h.context.request = async (path, init) => {
+    h.calls.push({ path, init });
+    assert.equal(init?.method, 'HEAD');
+    if (h.calls.length === 1) throw new Error('temporary connection failure');
+    return new Response(null, { headers: { 'content-type': 'text/plain' } });
+  };
+  const frontend = await activate(h.context);
+  const node: MarkdownNode = { kind: 'link', origin: { sessionId: 'fixture', messageId: 'old-saved' },
+    target: './old.txt', label: 'Old snapshot' };
+  const render = () => h.render(frontend.markdown![0]!.component, { node, fallback: 'safe fallback' });
+  render(); h.flushEffects(); await settle();
+  assert.equal(descendants(render()).some(element => element.props['aria-label'] === '同步文件 Old snapshot'), false);
+  openFile(render());
+  click(descendants(render()).find(element => element.props['aria-label'] === '重新加载 Old snapshot')!);
+  await settle();
+  assert.ok(descendants(render()).some(element => element.props['aria-label'] === '下载 Old snapshot'));
+  assert.deepEqual(h.calls.map(call => call.init?.method), ['HEAD', 'HEAD']);
   h.unmount(); frontend.dispose?.();
 });
 
