@@ -43,7 +43,7 @@ test('missing capture sources stay local across real host bootstraps and histori
   });
   const app = Fastify();
   t.after(async () => {
-    host.close();
+    await host.close();
     await app.close();
     await writableTree(root);
     await rm(root, { recursive: true, force: true });

@@ -21,6 +21,8 @@
       ready/                  原件和 metadata.json 原子发布
       discarded.json          明确丢弃上传后保留的小型终态标记
     staging/                  尚未发布的身份预留
+    prompt-<invocation-hash>/
+      state.json              Prompt preparation and native settlement journal
 ```
 
 这些条目按状态存在，并非每个文件同时具备。不为未来功能创建文件库数据库、缩略图服务或归档目录。
@@ -106,6 +108,30 @@ SHA-256 在上传/复制流经过时计算，记录实际保存字节的摘要�
 
 ## 6. 失败表现
 
+### Prompt journal
+
+Each external-file prompt invocation reserves its own private journal directory
+before copying. `captureKey` and attachment indices determine the ordinary
+capture identities; `files` records sources and completed file IDs. Capture
+records remain discoverable through these identities even if journaling the last
+completed copy fails. The journal contains no prompt text or blob contents.
+
+`preparing` means `next` has not been called. Preparation failure records
+`not_sent`, retaining any completed copies and per-file failures. Before `next`,
+the journal durably becomes `sending_unknown`. That state deliberately does not
+claim native acceptance: a downstream throw or process interruption cannot prove
+whether another middleware or native send produced an effect. Only a normal
+downstream return followed by a durable journal write records `returned` and the
+exact result (`ok`, `queued`, `messageId` when supplied). A returned negative result
+is not acceptance. Post-send journal errors surface; they do not roll back sends.
+
+No state causes an automatic send, recopy, deletion or restart recovery sweep.
+Re-entering the same recorded invocation is rejected. Host invocation IDs are
+per-call identifiers, not durable caller retry keys: a new explicit prompt call
+is a new operation and can produce another copy and native message. Do not retry
+unknown sends automatically. Existing all-managed Web sends need no new journal
+and preserve the existing draft/Host receipt recovery contract.
+
 | 情况 | 必须保留的事实 |
 | --- | --- |
 | 上传断流/大小超限 | 不发布部分文件；前端不把该附件视为就绪 |
@@ -165,10 +191,14 @@ SHA-256 在上传/复制流经过时计算，记录实际保存字节的摘要�
 从磁盘删除托管文件也不等于撤回 Copilot 上下文中的内容。
 已经打开的下载描述符或浏览器缓存也不会因此被撤回。
 
-宿主进入 closing 时撤销模块入口、监听和资源作用域，
-不等待文件上传、复制、下载或模块关闭回执。
-文件模块平时就完成可靠提交，不能依赖 async onClose 获得最后保存窗口。
-本体仍等待它实际拥有的原生工作；文件业务本身没有额外保活权。
+Files opts into public shutdown v1. The stopping signal closes its bounded work
+queue, aborts pending preparation/uploads/captures, and stops event producers.
+`onStop` joins started middleware work, including native settlement and journal
+persistence, before closing storage descriptors. Already started native effects
+are not undone. The Host still gates `next` and owns its shutdown deadline and
+failure policy; Files cannot send after cancellation to bypass those gates.
+Final storage close waits for active discards and destroys open downloads.
+Durability is established during normal processing, not deferred until exit.
 
 备份/搬迁时，模块原件和元数据需要作为一致的集合对待，
 原生会话数据仍按 Copilot 自身规则管理。只备份原生历史不能恢复模块原件，

@@ -11,7 +11,8 @@ The published SDK is pinned in `package.json` / `pnpm-lock.yaml`; the separate e
 integration host is in `tooling/host-integration.json` and the [installation guide](installation.md).
 Neither SDK semver nor a successful build proves host capability or deployment.
 可下载包以该 tag 的 Release workflow 成功发布的资产为准，发行不自动安装。
-包/后端 API 仍为 v1。本次只迁移 Web 接入，不修改文件捕获、存储或 HTTP 行为。
+Package/backend API remains v1. Public prompt middleware now manages ordinary
+local attachments; see [prompt ingestion](backend-design.md#prompt-ingestion).
 远程安装、全局文件库和旧历史补抓不在当前实现中。
 先看[构建与安装](installation.md)，再按主题了解当前契约。
 
@@ -68,7 +69,7 @@ Agent 用原生工具生成文件，正常回复 Markdown
 | 摘要 | SHA-256 可随保存流计算作完整性信息，不用来合并不同文件记录 |
 | 展示与等待 | 来源决定附件行/行内引用；HEAD 检查与用户显式打开的媒体预览分别有五秒预算，细节见[前端契约](frontend-contract.md) |
 | 渲染协议 | 原生消息和共享 URL 算法即可，不增加宿主展示资源图或卡片 SSE |
-| 生命周期 | 模块业务不阻止 graceful；正常处理时持久化，不依赖退出回调兜底保存 |
+| Lifecycle | Public shutdown v1 stops preparation and drains active work; normal processing persists every boundary |
 | 来源范围 | 按用户确认，允许捕获服务用户可读的本地普通文件；HTTP 读取不能据任意路径创建捕获 |
 | 大小与预览 | 默认单文件 100 MiB，可配置；图片及浏览器原生视频/音频，其他格式下载，不转码 |
 | 元数据 | 每文件 JSON 与原件原子提交，不使用数据库或内容去重对象池 |
@@ -103,7 +104,7 @@ Agent 用原生工具生成文件，正常回复 Markdown
 
 ## 5. 当前源码依据
 
-Builds use the exact published `@waksana/cockpit-module-sdk@0.7.0`, without generated
+Builds use the exact published `@waksana/cockpit-module-sdk@0.17.0`, without generated
 host declarations or a host checkout. It supplies Web API v3 state, component middleware
 and Markdown contracts; package/backend API v1 and runtime capability checks remain.
 原生 SDK 1.0.13、bundled runtime 1.0.83 / protocol 3 不因本次 Web 迁移改变。

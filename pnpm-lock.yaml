@@ -15,8 +15,8 @@ importers:
         specifier: 19.2.18
         version: 19.2.18
       '@waksana/cockpit-module-sdk':
-        specifier: 0.7.0
-        version: 0.7.0(@types/node@25.9.5)(@types/react@19.2.18)(react@19.3.0)
+        specifier: 0.17.0
+        version: 0.17.0(@types/node@25.9.5)(@types/react@19.2.18)(react@19.3.0)
       lucide-static:
         specifier: 1.46.0
         version: 1.46.0
@@ -35,8 +35,8 @@ packages:
   '@types/react@19.2.18':
     resolution: {integrity: sha512-AnzbBERsrLKtk2XSfTbYRLjQPdy116Sty4q+T+Bp3IC4l6jNBvreVPAHmpq9qhXQM7CXZPjLVmGMw9sy+hxQ3w==}
 
-  '@waksana/cockpit-module-sdk@0.7.0':
-    resolution: {integrity: sha512-Kfq9x4842fbRjVBlL+4MAwndPJEFtksV8Iy4hNYb+8RRVEZuHIqKKQZ6XqT98uACo2hzE9ypYlG8I+zSmzCcSA==, tarball: https://npm.pkg.github.com/download/@waksana/cockpit-module-sdk/0.7.0/1e7fa1ddf5c10119f671e0f9a29694438b360708}
+  '@waksana/cockpit-module-sdk@0.17.0':
+    resolution: {integrity: sha512-JGicI6nJSR9a1DXqaIluvTKDzTxpHQWdnyzE3+dpbSGejP5cLmbC3xvP2I1kCdL5m+OVu3TBFga++sJ+44mrkQ==, tarball: https://npm.pkg.github.com/download/@waksana/cockpit-module-sdk/0.17.0/13f0ac4d532a0fcdadf442642ab1a0e6125a08c6}
     peerDependencies:
       '@types/node': '>=22 <26'
       '@types/react': '>=18 <20'
@@ -75,7 +75,7 @@ snapshots:
     dependencies:
       csstype: 3.2.3
 
-  '@waksana/cockpit-module-sdk@0.7.0(@types/node@25.9.5)(@types/react@19.2.18)(react@19.3.0)':
+  '@waksana/cockpit-module-sdk@0.17.0(@types/node@25.9.5)(@types/react@19.2.18)(react@19.3.0)':
     dependencies:
       '@types/node': 25.9.5
       '@types/react': 19.2.18

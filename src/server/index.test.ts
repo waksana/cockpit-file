@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { promises as filesystem } from 'node:fs';
 import { mkdtemp, mkdir, readFile, writeFile, rm, readdir, stat } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
@@ -7,7 +8,7 @@ import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { test, type TestContext } from 'node:test';
-import type { ModuleRequest, ModuleResponse, NativeObservation } from '@waksana/cockpit-module-sdk/backend';
+import type { ModuleRequest, ModuleResponse, NativeObservation, ModuleIntentInvocation } from '@waksana/cockpit-module-sdk/backend';
 import { activate } from './index.ts';
 import { FileStorageError } from './storage.ts';
 import { encodeMessageReference } from '../shared/files.ts';
@@ -20,7 +21,8 @@ async function fixture(t: TestContext, config: Record<string, unknown> = {}) {
   const errors: unknown[] = [];
   const open = () => activate({
     apiVersion: 1, moduleId: 'cockpit-file', dataRoot: join(root, 'data'),
-    serviceReadyVersion: 1, host: { call() { assert.fail('File does not call host intents'); } },
+    serviceReadyVersion: 1, shutdownVersion: 1, stopping: controller.signal,
+    host: { interfaceMiddlewareVersion: 1, call() { assert.fail('File does not call host intents'); } },
     apiBase: '/_modules/cockpit-file/fixed-digest/api', config, signal: controller.signal,
     report: error => { errors.push(error); },
     invalidate() {}, publish() { assert.fail('File does not publish module events'); },
@@ -96,6 +98,46 @@ test('module upload returns the native attachment and supports HEAD, exact downl
   assert.equal(Buffer.concat(await part.body.toArray()).toString(), 'bcd');
   assert.equal((await f.request('GET', '/files/:fileId/:body', { params, headers: { range: 'bytes=99-' } })).status, 416);
   assert.equal((await f.request('GET', '/files/:fileId/:body', { params: { ...params, body: 'body.png' } })).status, 404);
+});
+
+test('shutdown drains middleware settlement, rejects queued prompts and preserves committed copies', async t => {
+  const f = await fixture(t, { maxConcurrent: 1 });
+  const path = join(f.cwd, 'prompt.txt');
+  await writeFile(path, 'prompt bytes');
+  const input = (): ModuleIntentInvocation<'prompt'> => ({
+    name: 'prompt', invocationId: randomUUID(), origin: 'api', signal: new AbortController().signal,
+    body: { sessionId: 'synthetic-session', text: '', attachments: [{ type: 'file', path }] },
+  });
+  let enter!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  let accept!: (receipt: { ok: boolean; messageId: string }) => void;
+  const native = new Promise<{ ok: boolean; messageId: string }>(resolve => { accept = resolve; });
+  let managed = '';
+  const first = f.module.middleware!.prompt!(input(), async patch => {
+    const file = patch!.attachments![0]!;
+    if (file.type !== 'file') assert.fail();
+    managed = file.path;
+    enter();
+    return native;
+  });
+  await entered;
+  const queued = f.module.middleware!.prompt!(input(), async () => assert.fail('Queued native send after stop'));
+  const rejected = assert.rejects(queued, /closing/);
+  let closed = false;
+  const stopping = Promise.resolve(f.module.onStop!()).then(() => { closed = true; });
+  await rejected;
+  await delay(10);
+  assert.equal(closed, false);
+  accept({ ok: true, messageId: 'accepted-native' });
+  await first;
+  await stopping;
+  assert.equal(await readFile(managed, 'utf8'), 'prompt bytes');
+  const records = (await readdir(join(f.root, 'data'))).filter(name => name.startsWith('prompt-'));
+  assert.equal(records.length, 1);
+  const record = JSON.parse(await readFile(join(f.root, 'data', records[0]!, 'state.json'), 'utf8'));
+  assert.equal(record.state, 'returned');
+  assert.deepEqual(record.receipt, { ok: true, messageId: 'accepted-native' });
+  await assert.rejects(f.module.middleware!.prompt!(input(), async () => assert.fail()), /closing/);
 });
 
 test('historical completions and resource reads cannot import a local file', async t => {

@@ -1,8 +1,14 @@
 # Cockpit File 0.0.0-dev
 
-- Use published SDK 0.7.0 and frontend API v3 with publicComponents v1,
+- Use published SDK 0.17.0 and frontend API v3 with publicComponents v1,
   draftOwner v1 and draftSubmission v2. The integration host is pinned to
-  `0dcfd6688b4c01b3f29776ee804b901612a6ae9b`.
+  `f520eb51646b26cf166ca37987fd5fd5b4dbc8f5`.
+- Transparently copy ordinary absolute native `file` attachments through public
+  prompt middleware, retaining source files and native receipts. Existing
+  verified Web-managed files pass unchanged without body rescanning or copying.
+- Require interfaceMiddleware v1 and shutdown v1; stop preparation and drain
+  copy/send-settlement work. Persist partial-copy and unknown-send facts without
+  automatic resend or deletion of possibly referenced originals.
 - Share one File enhancement chain across native and generic owner drafts.
   Respect owner edit/attachment capabilities, retain captured upload lifetimes,
   preserve Base content/actions, and probe mounted previews independently of

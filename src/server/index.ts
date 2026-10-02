@@ -9,6 +9,7 @@ import { createFileStorage, FileStorageError, type FileLookup, type FileMetadata
 import { createMarkdownScanner, type MarkdownReference, type MarkdownScanner } from './scanner.ts';
 import { createWorkLimit } from './work.ts';
 import { displayVersion } from '../shared/version.ts';
+import { promptMiddleware } from './prompt.ts';
 
 interface MessageState {
   sessionId: string;
@@ -108,6 +109,9 @@ function rangeOf(value: string, size: number): FileRange {
 }
 
 export const activate: ActivateBackend = async (context: ModuleBackendContext) => {
+  if (context.host.interfaceMiddlewareVersion !== 1 || context.shutdownVersion !== 1) {
+    throw new Error('Files requires interfaceMiddlewareVersion: 1 and shutdownVersion: 1');
+  }
   const allowed = new Set(['maxBytes', 'maxConcurrent', 'maxPending', 'maxActiveMessages', 'maxCandidateChars', 'maxReferences']);
   for (const key of Object.keys(context.config)) if (!allowed.has(key)) throw new Error(`Unknown file configuration: ${key}`);
   const maxBytes = integer(context.config, 'maxBytes', 100 * 1024 * 1024, 1024 * 1024 * 1024);
@@ -118,7 +122,10 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
   if (maxCandidateChars < 16) throw new Error('maxCandidateChars must be at least 16');
   const maxReferences = integer(context.config, 'maxReferences', 256, 65536);
   const storage = await createFileStorage({ root: context.dataRoot, maxBytes, maxConcurrent });
-  const work = createWorkLimit(maxConcurrent, maxPending, context.signal);
+  const shutdown = new AbortController();
+  const stopped = AbortSignal.any([context.signal, context.stopping, shutdown.signal]);
+  const work = createWorkLimit(maxConcurrent, maxPending, stopped);
+  const prompt = promptMiddleware(storage, stopped);
   const captures = new Set<string>();
   const messages = new Map<string, MessageState>();
   const keyOf = (sessionId: string, messageId: string) => JSON.stringify([sessionId, messageId]);
@@ -134,7 +141,7 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
     const captureKey = JSON.stringify([state.sessionId, state.messageId, target]);
     if (captures.has(captureKey)) return;
     captures.add(captureKey);
-    void work.run(() => storage.capture(keyOf(state.sessionId, state.messageId), target, paths, context.signal))
+    void work.run(() => storage.capture(keyOf(state.sessionId, state.messageId), target, paths, stopped))
       .catch(error => {
         // Missing sources already have a terminal per-reference failure, exposed by GET/HEAD.
         if (!(error instanceof FileStorageError) || error.code !== 'SOURCE_NOT_FOUND') report(error);
@@ -223,17 +230,18 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
   const dispose = () => {
     if (disposed) return closing;
     disposed = true;
+    shutdown.abort();
     clearInterval(expire);
     for (const state of messages.values()) finish(state);
     messages.clear();
     work.dispose();
-    context.signal.removeEventListener('abort', dispose);
-    closing = storage.close();
+    stopped.removeEventListener('abort', dispose);
+    closing = work.drained().then(() => storage.close());
     void closing.catch(report);
     return closing;
   };
-  context.signal.addEventListener('abort', dispose, { once: true });
-  if (context.signal.aborted) dispose();
+  stopped.addEventListener('abort', dispose, { once: true });
+  if (stopped.aborted) dispose();
 
   async function lookup(request: ModuleRequest, byMessage: boolean) {
     if (!byMessage) {
@@ -281,6 +289,8 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
   }
 
   return {
+    middleware: { prompt: (invocation, next) => work.run(() => prompt(invocation, next), invocation.signal) },
+    onStop: dispose,
     publicConfig: { maxBytes, nativePathPrefix: `${storage.root}/files/`, displayVersion },
     events: {
       types: ['assistant.message_start', 'assistant.message_delta', 'assistant.message', 'assistant.turn_end', 'abort', 'session.shutdown'],
@@ -306,7 +316,8 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
           try {
             const body = request.body;
             const file = await work.run(() => storage.upload(operationId, body, name,
-              typeof request.headers['x-file-mime'] === 'string' ? request.headers['x-file-mime'] : undefined, request.signal), request.signal);
+              typeof request.headers['x-file-mime'] === 'string' ? request.headers['x-file-mime'] : undefined,
+              AbortSignal.any([request.signal, stopped])), request.signal);
             return { headers: { 'Cache-Control': 'no-store' }, body: {
               fileId: file.id, url: managedFileUrl(context.apiBase, file.id, basename(file.path)),
               name: file.name, mime: file.mime, size: file.size, sha256: file.sha256,

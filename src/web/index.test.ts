@@ -265,6 +265,14 @@ function harness() {
   const context: ModuleFrontendContext = {
     apiVersion: 3, moduleId: 'cockpit-file', react: react as unknown as ModuleFrontendContext['react'],
     publicComponentsVersion: 1, draftOwnerVersion: 1, settingsVersion: 1,
+    messagePresentationVersion: 1, conversationPresentationVersion: 1,
+    conversation: { useScroll() { assert.fail('Files does not own conversation scrolling'); } },
+    pageVersion: 1,
+    navigation: {
+      path() { assert.fail('Files does not register pages'); },
+      navigate() { assert.fail('Files does not navigate'); },
+      home() { assert.fail('Files does not navigate'); },
+    },
     components: { get() { assert.fail('File wraps the supplied Base'); } },
     uiVersion: 1,
     uiSurfaceVersion: 1,

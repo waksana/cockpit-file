@@ -4,9 +4,9 @@
 
 Current source stays at **0.0.0-dev**; normal main merges attempt an immutable
 Rolling Release. See [the release guide](releases.md) for the four verified assets.
-The build dependency is the published **`@waksana/cockpit-module-sdk@0.7.0`** from
+The build dependency is the published **`@waksana/cockpit-module-sdk@0.17.0`** from
 `https://npm.pkg.github.com`, pinned exactly in `package.json` and `pnpm-lock.yaml`.
-The integration host is mainline commit `0dcfd6688b4c01b3f29776ee804b901612a6ae9b`,
+The integration host is mainline commit `f520eb51646b26cf166ca37987fd5fd5b4dbc8f5`,
 recorded separately in [`tooling/host-integration.json`](../tooling/host-integration.json).
 It is not required to build or package the module. SDK and host versions are independent.
 Builds and release publication never install, deploy or restart anything.
@@ -18,7 +18,9 @@ Changed package bytes must not replace an existing installed identity.
 The frontend requires Web API v3, publicComponents v1, draftOwner v1,
 draftSubmission v2, UI v1, `context.uiSurfaceVersion === 1` and
 `context.createPortal`; missing capabilities fail before activation.
-模块包和后端 API 仍为 v1，后端行为没有随本次 Web 迁移改变。
+The backend requires `context.host.interfaceMiddlewareVersion === 1` and
+`context.shutdownVersion === 1` before opening storage. Package/backend API v1
+alone does not establish either capability. See [prompt ingestion](backend-design.md#prompt-ingestion).
 The bundle exports `frontendApiVersion = 3`; context/result both declare API v3.
 Neither a host version nor backend API v1 implies frontend compatibility.
 公共规则见宿主[模块 UI 指南](https://github.com/waksana/cockpit/blob/main/docs/module-ui-guide.md)。
@@ -159,6 +161,7 @@ Copilot 原生会话和认证使用自己的默认目录及配置，不受 `COCK
   modules/config.json                 模块选择与参数
   modules/installed/cockpit-file/...   不可变模块代码
   modules/data/cockpit-file/
+    prompt-<invocation-hash>/state.json
     files/<fileId>/
       identity.json
       state.json
