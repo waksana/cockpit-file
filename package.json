@@ -16,7 +16,7 @@
   "devDependencies": {
     "@types/node": "25.9.5",
     "@types/react": "19.2.18",
-    "@waksana/cockpit-module-sdk": "0.7.0",
+    "@waksana/cockpit-module-sdk": "0.17.0",
     "lucide-static": "1.46.0",
     "typescript": "5.9.3",
     "yaml": "2.8.1"

@@ -3,8 +3,9 @@ import { constants } from 'node:fs';
 import { mkdir, open, readdir, realpath, rename, rm, rmdir, unlink } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
-import { basename, extname, isAbsolute, join, resolve } from 'node:path';
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
+import type { ModuleHostIntentResult } from '@waksana/cockpit-module-sdk/backend';
 
 export const DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
 const BLOCK_BYTES = 64 * 1024;
@@ -47,6 +48,16 @@ export interface OpenedFile {
   length: number;
 }
 export interface FileStorageOptions { root: string; maxBytes?: number; maxConcurrent?: number }
+export interface PromptRecord {
+  version: 1;
+  invocationId: string;
+  sessionId: string;
+  captureKey: string;
+  state: 'preparing' | 'not_sent' | 'sending_unknown' | 'returned';
+  files: { index: number; source: string; fileId?: string }[];
+  receipt?: ModuleHostIntentResult<'prompt'>;
+  error?: StoredFailure;
+}
 export interface FileStorage {
   readonly root: string;
   readonly maxBytes: number;
@@ -56,6 +67,8 @@ export interface FileStorage {
   lookupFile(fileId: string): Promise<FileLookup>;
   lookupUpload(operationId: string): Promise<FileLookup>;
   lookupCapture(messageKey: string, reference: string): Promise<FileLookup>;
+  managedPath(path: string): Promise<FileMetadata | undefined>;
+  recordPrompt(record: PromptRecord, create?: boolean): Promise<void>;
   openFile(fileId: string, range?: FileRange): Promise<OpenedFile>;
   close(): Promise<void>;
 }
@@ -792,6 +805,59 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
       }, { paths }, signal);
     },
     lookupFile,
+    async managedPath(path) {
+      ensureOpen();
+      key(path, 'attachment path');
+      if (!isAbsolute(path)) throw failure('INVALID_INPUT', 'Prompt file paths must be absolute native filesystem paths');
+      const inside = (candidate: string) => {
+        const suffix = relative(root, candidate);
+        return suffix === '' || (suffix !== '..' && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix));
+      };
+      const normalized = resolve(path);
+      const claimed = path === root || path.startsWith(`${root}${sep}`);
+      let canonical: string;
+      try { canonical = await realpath(path); }
+      catch (error) {
+        if (!claimed && !inside(normalized) && (hasCode(error, 'ENOENT') || hasCode(error, 'ENOTDIR'))) return undefined;
+        throw failure('INVALID_SOURCE', 'Cannot resolve prompt attachment or claimed managed file', error);
+      }
+      if (!claimed && !inside(normalized) && !inside(canonical)) return undefined;
+      const parts = relative(root, normalized).split(sep);
+      if (path !== normalized || canonical !== path || parts.length !== 4 || parts[0] !== 'files'
+          || !ID.test(parts[1]!) || parts[2] !== 'ready' || !BODY.test(parts[3]!)) {
+        throw failure('INVALID_SOURCE', 'Invalid managed attachment path; it will not be imported as an external file');
+      }
+      const found = await lookupFile(parts[1]!);
+      if (found.state !== 'ready' || found.file.path !== path) {
+        throw failure('INVALID_SOURCE', 'Managed attachment has no matching ready record');
+      }
+      // Check the native pathname too, not only the pinned storage descriptors.
+      const handle = await slot(found.file.id);
+      if (!handle) throw failure('CORRUPT', 'Managed attachment record disappeared');
+      try {
+        const saved = await metadata(handle, found.file.id);
+        if (!saved) throw failure('CORRUPT', 'Managed attachment is no longer ready');
+        const body = await open(path, READ_FLAGS);
+        try { await validateBody(body, saved); }
+        finally { await body.close(); }
+      } finally { await handle.close(); }
+      return found.file;
+    },
+    async recordPrompt(record, create = false) {
+      ensureOpen();
+      const name = `prompt-${createHash('sha256').update(key(record.invocationId, 'invocationId')).digest('hex')}`;
+      if (create) {
+        try { await mkdir(fdPath(rootHandle, name), { mode: 0o700 }); }
+        catch (error) {
+          if (hasCode(error, 'EEXIST')) throw failure('CONFLICT', 'Prompt invocation already recorded; it will not be replayed');
+          throw error;
+        }
+        await rootHandle.sync();
+      }
+      const handle = await directory(fdPath(rootHandle, name));
+      try { await writeJson(handle, 'state.json', record); }
+      finally { await handle.close(); }
+    },
     lookupUpload(operationId) {
       return lookupFile(identityId({ kind: 'upload', operationId: uploadKey(operationId), name: '' }));
     },

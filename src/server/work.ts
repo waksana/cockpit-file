@@ -4,6 +4,7 @@ export function createWorkLimit(concurrency: number, pendingLimit: number, signa
   const queue: { start(): void; reject(error: Error): void }[] = [];
   let active = 0;
   let stopped = false;
+  const waiters = new Set<() => void>();
   const closed = () => new FileStorageError('CLOSED', 'File module is closing');
   const drain = () => {
     while (active < concurrency && queue.length && !signal.aborted && !stopped) queue.shift()!.start();
@@ -28,7 +29,13 @@ export function createWorkLimit(concurrency: number, pendingLimit: number, signa
             requestSignal?.removeEventListener('abort', abort);
             if (stopped || signal.aborted || requestSignal?.aborted) { reject(closed()); return; }
             active++;
-            void Promise.resolve().then(operation).then(resolve, reject).finally(() => { active--; drain(); });
+            void Promise.resolve().then(operation).then(resolve, reject).finally(() => {
+              active--; drain();
+              if (!active && !queue.length) {
+                for (const resolve of waiters) resolve();
+                waiters.clear();
+              }
+            });
           },
         };
         if (active < concurrency) item.start();
@@ -39,5 +46,8 @@ export function createWorkLimit(concurrency: number, pendingLimit: number, signa
       });
     },
     dispose() { signal.removeEventListener('abort', stop); stop(); },
+    drained(): Promise<void> {
+      return active || queue.length ? new Promise(resolve => waiters.add(resolve)) : Promise.resolve();
+    },
   };
 }

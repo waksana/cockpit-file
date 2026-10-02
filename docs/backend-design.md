@@ -1,14 +1,17 @@
 # 首版后端设计
 
-**当前后端实现随模块包交付。** 本文描述其分工；0.1.7 的 Web 迁移不改变后端行为。
+**The backend ships with the module archive.** This page owns backend behavior,
+including transparent prompt ingestion.
 实际入口、配置和路由见[构建与安装](installation.md)，公共接口为 Module API v1。
 
 ## 1. 范围
 
-首版只完成两条链路：
+The backend supports these paths:
 
 ```text
 用户上传 -> 保存文件 -> 返回原生附件 -> 本体发送 -> 原生附件 path 映射为可读 URL
+
+Native local file -> public prompt middleware -> managed copy -> native send
 
 新实时回复 -> 流式识别文件链接 -> 复制为快照 -> 绑定消息/引用 -> 卡片按约定 URL 读取
 ```
@@ -86,6 +89,36 @@ attachment: { type: "file", path, displayName }
 同一身份不可复活，其他相同内容上传和消息捕获不受影响。
 外部/未知 staging 所有者明确拒绝而不接管；请求断开不取消已开始的丢弃，关闭会跟踪其资源。
 详见存储文档的终态、错误和保留边界。
+
+### Prompt ingestion
+
+`ModuleBackend.middleware.prompt` wraps the existing public interface shared by
+Web, HTTP/MCP and ordinary module `context.host.call('prompt', ...)` calls. Files
+calls `next` once, never recursively calls `prompt`, never changes text, target,
+mode or request identity, and never replaces the native result. Native SDK
+internal sends and schedules outside this Host interface are not intercepted.
+Without Files, the Host's ordinary native prompt interface remains available.
+
+Only native `type: 'file'` attachments are enhanced. Supply an absolute native
+filesystem path; relative paths and `file:`/HTTP URLs are rejected rather than
+guessing a session working directory or downloading content. Directory, selection
+and blob attachments retain their native semantics. External ordinary files
+(including local symlink targets) use the existing bounded copy pipeline: open,
+fstat, size check, one streaming copy/hash and a bounded MIME prefix, then atomic
+publication and durability confirmation. The source is never moved or deleted.
+MIME recognition is not a complete-file security scan.
+
+Existing Web-managed paths must match the canonical private namespace, a ready
+file identity/metadata record and the actual body's inode/timestamp/size stamp.
+They pass unchanged with no copy or body hash/read. Missing, pending, corrupt,
+aliased or malformed claimed managed paths fail instead of being reimported.
+The existing path-to-URL/frontend mapping also renders newly managed copies.
+
+Partial copies and native-send uncertainty are retained in the
+[prompt journal](storage-and-lifecycle.md#prompt-journal). There is no new file
+send/upload API, remote URL fetcher, event listener or cross-module storage
+protocol. Other integrations keep ownership of their own copies and need no
+Files-private objects. The outgoing real-time Markdown capture below is unchanged.
 
 ### C. 新回复的流式捕获
 

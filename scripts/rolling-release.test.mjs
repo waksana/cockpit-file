@@ -92,7 +92,7 @@ test('isolated archive has four assets, byte-identical descriptor, source-derive
   manifest.version = metadata.version;
   await writeFile(join(f.root, 'cockpit.module.json'), JSON.stringify(manifest));
   await writeFile(join(f.root, '.gitignore'), 'dist/\nnode_modules/\n.module-build.json\noutput/\nremote/\n');
-  for (const path of ['src/web/index.tsx', 'src/web/file-draft.ts', 'src/server/storage.ts']) {
+  for (const path of ['src/web/index.tsx', 'src/web/file-draft.ts', 'src/server/storage.ts', 'src/server/index.ts']) {
     await mkdir(join(f.root, path, '..'), { recursive: true });
     await writeFile(join(f.root, path), await readFile(new URL(`../${path}`, import.meta.url)));
   }
@@ -117,6 +117,8 @@ test('isolated archive has four assets, byte-identical descriptor, source-derive
   assert.ok(descriptor.product.requiresCapabilities.includes('frontend-api.v3'));
   assert.ok(descriptor.product.requiresCapabilities.includes('publicComponents.v1'));
   assert.ok(descriptor.product.requiresCapabilities.includes('draftOwner.v1'));
+  assert.ok(descriptor.product.requiresCapabilities.includes('interfaceMiddleware.v1'));
+  assert.ok(descriptor.product.requiresCapabilities.includes('shutdown.v1'));
   assert.equal(JSON.parse(await readFile(join(f.root, 'package.json'))).version, '0.0.0-dev');
   assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: f.root, encoding: 'utf8' }), '');
   const notes = releaseNotes(event(sha), identity, files);

@@ -100,7 +100,8 @@ jobs:
           timeout 300 node --import ./apps/server/node_modules/tsx/dist/loader.mjs --test \
             apps/server/src/module-file.integration.test.ts \
             "$GITHUB_WORKSPACE/scripts/test-support/capture-feedback.integration.mjs" \
-            "$GITHUB_WORKSPACE/scripts/test-support/generic-draft.integration.mjs"
+            "$GITHUB_WORKSPACE/scripts/test-support/generic-draft.integration.mjs" \
+            "$GITHUB_WORKSPACE/scripts/test-support/prompt-middleware.integration.mjs"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: cockpit-file-${{ inputs.source_sha || github.sha }}-linux-x64
