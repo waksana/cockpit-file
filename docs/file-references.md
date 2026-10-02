@@ -140,7 +140,8 @@ Copilot SDK 的 `session.workspacePath` 是包含 `files/` 的原生会话工作
 模块后端的已选范围是：对本宿主已经加载的 session 实际收到的新回复通知尽早处理，
 即使无人打开网页。边界从模块实际加载启用开始，不以安装包下载时间或浏览器首次见到消息计算。
 翻旧历史只查已有文件绑定，不补上传、不回读源文件、不做旧数据兼容。
-已经捕获的文件仍可在历史中查看；未捕获的旧引用明确不可用。
+Already-captured files remain available in history. Missing references stay unavailable
+until a user explicitly requests [synchronization](#explicit-synchronization).
 不能把会话恢复或事件重放误认成新输出；无法确认来源时不猜测补抓。
 delta 丢失或中途改写的链接属于 best-effort 边界；新消息的完整事件可以补漏，
 但不能恢复没有捕获到的旧文件字节。临时链接后来消失时，可能已经产生额外托管文件，
@@ -148,6 +149,62 @@ delta 丢失或中途改写的链接属于 best-effort 边界；新消息的完�
 不为文件捕获加载所有会话、扫描全部历史或增加原生保活。
 模块未运行期间的旧文件若已变化或删除，不能从 Markdown 链接还原旧字节。
 完整的无内容去重、可靠提交与保留规则见[存储与生命周期](storage-and-lifecycle.md)。
+
+### Explicit synchronization
+
+A confirmed missing or eligible failed local message reference has an adjacent reload button.
+Network, authorization and unconfirmed probe timeouts retain a read-only preview retry.
+The detail dialog keeps that read-only retry even when synchronization is available.
+Clicking synchronization sends
+`POST /messages/<encodedReference>` with only `{ "operationId": "<UUID>" }`.
+The Host's current module digest and normal access protection apply. Rendering,
+GET/HEAD, reopening history and restarting the module never initiate this action.
+Uploaded attachments and already-ready snapshots are not replacement targets.
+
+The backend reads only public `session/chat` persisted pages to verify the exact
+native session, `assistant.message.data.messageId` and supported Markdown target.
+It does not load sessions, send prompts, read private native files or accept a
+client-supplied source path. Verification is bounded to 32 pages of 64 events and
+8 MiB of inspected event JSON; an expired cursor, missing message or exceeded
+budget explicitly fails instead of scanning all history.
+The selected message has a separate 256 KiB parsing limit. Authorization uses
+CommonMark/GFM AST link/image nodes, not the best-effort live streaming scanner;
+quoted/list-nested code and raw HTML cannot authorize a source read.
+Reference-style links/images resolve through their first matching definition, as
+in the Host; an unused definition alone never authorizes synchronization.
+
+Absolute local paths and local `file:` URLs identify their own source. Ordinary
+relative paths require a preceding root native `session.start` or
+`session.context_changed` cwd. Child-message relative paths and normalized
+`files/...` references fail with `CONTEXT_UNAVAILABLE`: persisted history does not
+prove the child cwd or SDK workspace candidates. Share an absolute path in a new
+reply when historical context is unavailable; no HOME-based guessing is used.
+
+Only a missing capture or a definite source/copy failure can be attempted.
+Pending, foreign/interrupted ownership, corrupt snapshots and uncertain storage
+outcomes are not taken over. Before opening the source, the existing exclusive
+attempt writes a durable reload marker retaining the previous failure. Reusing
+that operation ID cannot open the source again; a new explicit attempt after a
+definite failure uses a new ID. Unknown HTTP receipts retain the same ID in the
+current frontend activation and never trigger automatic retries.
+
+The first successful ready snapshot still wins. Synchronization saves bytes from
+the source **now**, not the version at the original message time. Success returns
+`fileId` and `capturedAt`, then the UI rechecks metadata; it does not fetch media
+until the user opens a preview. The backend abort signal has a 30-second budget
+and the browser stops waiting after 35 seconds. An in-flight public history RPC
+cannot itself be cancelled through the SDK; it is drained and its result is
+rejected after cancellation. Timeout/disconnection never implies rollback.
+
+### Remote image boundary
+
+Files does not claim HTTP/HTTPS Markdown links or images. The pinned Host
+`MessageBody` intentionally renders an unsupported Markdown image as literal
+`![alt](url)` text, without an `<img>` or an image request; ordinary links remain
+clickable. A controlled loopback browser fixture confirmed both HTTP and HTTPS
+targets take this fallback and a clicked HTTP link opens the synthetic SVG.
+This does not test a TLS server, remote CORS policy or mixed-content loading.
+No remote preview, proxy, cache or automatic request is added.
 
 ## 5. 卡片读取与模型输入分开
 

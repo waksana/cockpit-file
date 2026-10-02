@@ -10,6 +10,7 @@ import { createMarkdownScanner, type MarkdownReference, type MarkdownScanner } f
 import { createWorkLimit } from './work.ts';
 import { displayVersion } from '../shared/version.ts';
 import { promptMiddleware } from './prompt.ts';
+import { reloadSource } from './reload.ts';
 
 interface MessageState {
   sessionId: string;
@@ -72,6 +73,8 @@ function errorResponse(error: unknown): ModuleResponse {
     INVALID_INPUT: 400, INVALID_SOURCE: 422, LIMIT_EXCEEDED: 413,
     CONFLICT: 409, PENDING: 202, BUSY: 503, CLOSED: 503, ABORTED: 409,
     SOURCE_NOT_FOUND: 404, NOT_FOUND: 404, SOURCE_UNREADABLE: 403, DISCARDED: 410, ACTIVITY_UNKNOWN: 409,
+    REFERENCE_MISMATCH: 422, HISTORY_LIMIT: 422, HISTORY_UNCONFIRMED: 409, CONTEXT_UNAVAILABLE: 422,
+    RELOAD_REPLAY: 409,
   } as Record<string, number>)[error.code] ?? 500;
   return { status, headers: { 'Cache-Control': 'no-store' },
     body: { code: error.code, error: error.message, ...(error.fileId ? { fileId: error.fileId } : {}),
@@ -112,6 +115,7 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
   if (context.host.interfaceMiddlewareVersion !== 1 || context.shutdownVersion !== 1) {
     throw new Error('Files requires interfaceMiddlewareVersion: 1 and shutdownVersion: 1');
   }
+  if (context.host.chatReadVersion !== 1) throw new Error('Files requires chatReadVersion: 1 for explicit synchronization');
   const allowed = new Set(['maxBytes', 'maxConcurrent', 'maxPending', 'maxActiveMessages', 'maxCandidateChars', 'maxReferences']);
   for (const key of Object.keys(context.config)) if (!allowed.has(key)) throw new Error(`Unknown file configuration: ${key}`);
   const maxBytes = integer(context.config, 'maxBytes', 100 * 1024 * 1024, 1024 * 1024 * 1024);
@@ -127,6 +131,7 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
   const work = createWorkLimit(maxConcurrent, maxPending, stopped);
   const prompt = promptMiddleware(storage, stopped);
   const captures = new Set<string>();
+  const reloads = new Set<string>();
   const messages = new Map<string, MessageState>();
   const keyOf = (sessionId: string, messageId: string) => JSON.stringify([sessionId, messageId]);
   let disposed = false;
@@ -265,7 +270,7 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
       } };
       if (result.state === 'failed') return { status: 422, headers: {
         'Cache-Control': 'no-store', 'X-File-State': 'failed',
-        ...(result.error.code === 'SOURCE_NOT_FOUND' ? { 'X-File-Error-Code': 'SOURCE_NOT_FOUND' } : {}),
+        'X-File-Error-Code': result.error.code,
       }, body: head ? undefined : { code: result.error.code, error: result.error.message } };
       const headers = fileHeaders(result.file, request.query.download === '1');
       if (head) return { headers };
@@ -298,6 +303,44 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
     },
     dispose,
     routes: [
+      { method: 'POST', path: '/messages/*', body: 'json', bodyLimit: 1024,
+        handler: async request => {
+          let captureKey: string | undefined;
+          try {
+            const body = request.body;
+            if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 1
+                || !('operationId' in body) || typeof body.operationId !== 'string'
+                || !/^[a-f0-9-]{36}$/.test(body.operationId)) {
+              throw new FileStorageError('INVALID_INPUT', 'Expected one synchronization operationId');
+            }
+            const encoded = one(request.params['*'], 'message reference');
+            let decoded: ReturnType<typeof decodeMessageReference>;
+            try { decoded = decodeMessageReference(encoded); }
+            catch (error) { throw new FileStorageError('INVALID_INPUT', 'Invalid message reference', { cause: error }); }
+            const operationId = body.operationId;
+            const key = JSON.stringify([decoded.origin.sessionId, decoded.origin.messageId, decoded.reference]);
+            if (reloads.has(key) || captures.has(key)) throw new FileStorageError('PENDING', 'This reference is already being processed');
+            reloads.add(key);
+            captureKey = key;
+            const signal = AbortSignal.any([request.signal, stopped, AbortSignal.timeout(30_000)]);
+            const file = await work.run(async () => {
+              const source = await reloadSource(context.host, encoded, signal);
+              signal.throwIfAborted();
+              const messageKey = keyOf(source.origin.sessionId, source.origin.messageId);
+              // Immutable ready records win; explicit reload never replaces their bytes.
+              const existing = await storage.lookupCapture(messageKey, source.reference);
+              if (existing.state === 'ready') return existing.file;
+              return storage.reloadCapture(messageKey, source.reference, source.path, operationId, signal);
+            }, signal);
+            return { headers: { 'Cache-Control': 'no-store' }, body: {
+              state: 'ready', fileId: file.id, capturedAt: file.createdAt,
+              note: 'Saved bytes reflect the source at capture time, not necessarily the original message time.',
+            } };
+          } catch (error) {
+            if (request.signal.aborted) report(error);
+            return errorResponse(error);
+          } finally { if (captureKey) reloads.delete(captureKey); }
+        } },
       { method: 'DELETE', path: '/uploads/:operationId',
         handler: async request => {
           try {

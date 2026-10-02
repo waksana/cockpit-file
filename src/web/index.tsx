@@ -145,6 +145,7 @@ export const activate: ActivateFrontend = context => {
     busy?: boolean;
     download?: boolean;
     inline?: boolean;
+    synchronize?: ReactNode;
   }
 
   interface Preview {
@@ -161,7 +162,7 @@ export const activate: ActivateFrontend = context => {
     timeout?: ReturnType<typeof setTimeout>;
   }
 
-  function FileTile({ name, size, status, error, errorLabel = '文件异常', busy = false, metadata, actions, retry,
+  function FileTile({ name, size, status, error, errorLabel = '文件异常', busy = false, metadata, actions, retry, synchronize,
     preview, inline = false, href, downloadUrl, identity = name }: CardProps & {
     metadata?: string; preview?: Preview; href?: string; downloadUrl?: string; identity?: string | object;
   }) {
@@ -279,6 +280,7 @@ export const activate: ActivateFrontend = context => {
           <span className="cf-action-slot">{actions || downloadAction}</span>
         </span>
       </>}
+      {inline && synchronize}
       {failure && <span className="cf-announcement" role="alert">{failure}</span>}
       {open && page?.body && createPortal(<dialog key={expanded.revision} ref={dialog} className="ck-surface ck-modal cf-preview-dialog" aria-label={`${preview && !failure ? '预览' : '文件详情'} ${name}`}
         onClose={() => setExpanded(current => current === expanded ? undefined : current)}>
@@ -323,7 +325,8 @@ export const activate: ActivateFrontend = context => {
     }
   }
 
-  function FileCard({ url, name, size, actions, retry, status, busy, error, errorLabel, inline, download = true }: CardProps & { url: string }) {
+  function FileCard({ url, name, size, actions, retry, status, busy, error, errorLabel, inline, download = true,
+    reloadable = false }: CardProps & { url: string; reloadable?: boolean }) {
     const state = React.useSyncExternalStore(
       React.useCallback(listener => probes.subscribe(url, listener), [url]),
       React.useCallback(() => probes.snapshot(url), [url]),
@@ -336,17 +339,25 @@ export const activate: ActivateFrontend = context => {
         : state.failure?.kind === 'http' && state.failure.code === 'SOURCE_NOT_FOUND' ? '源文件不存在'
           : state.failure?.kind === 'http' && [401, 403].includes(state.failure.status) ? '无访问权限'
             : state.failure?.kind === 'http' && state.failure.status === 422 ? '捕获失败' : '检查失败';
-    return <FileTile name={name} identity={url} href={url} inline={inline} busy={busy ?? loading}
-      status={status || (loading ? '检查中' : undefined)}
+    const synchronize = reloadable && ((state.status === 'unavailable' && state.canSynchronize) || state.synchronizing) &&
+      <button type="button" className="ck-icon-button" disabled={state.synchronizing}
+        title="重新处理：保存源文件现在的内容，不覆盖已有快照"
+        aria-label={`同步文件 ${name}`} onClick={() => { void probes.synchronize(url); }}>
+        <ActionIcon name="retry" />
+      </button>;
+    return <FileTile name={name} identity={url} href={url} inline={inline} busy={state.synchronizing || (busy ?? loading)}
+      synchronize={synchronize}
+      status={state.synchronizing ? '正在同步文件' : status || state.synchronizationNote || (loading ? '检查中' : undefined)}
       size={bytes} metadata={bytes === undefined ? state.mime : undefined}
       error={error || state.error}
       errorLabel={error ? errorLabel : checkErrorLabel}
       preview={state.status === 'ready' && kind ? {
         url, key: `${url}:${state.round}`, kind,
       } : undefined}
-      retry={retry ?? (state.status === 'unavailable' &&
+      retry={retry ?? (state.status === 'unavailable' && <>
+          {synchronize}
           <button type="button" className="ck-icon-button" title="重试预览" onClick={() => probes.retry(url)}
-            aria-label={`重新加载 ${name}`}><ActionIcon name="retry" /></button>)}
+            aria-label={`重新加载 ${name}`}><ActionIcon name="retry" /></button></>)}
       downloadUrl={download && state.status === 'ready' ? `${url}?download=1` : undefined}
       actions={actions} />;
   }
@@ -407,7 +418,7 @@ export const activate: ActivateFrontend = context => {
   function FileRenderer({ node, fallback }: MarkdownRendererProps) {
     const url = nodeUrl(node);
     if (!url) return fallback;
-    return <FileCard key={url} url={url} inline name={node.label || '文件'} />;
+    return <FileCard key={url} url={url} inline reloadable name={node.label || '文件'} />;
   }
 
   function AttachmentCard(props: AttachmentProps & { url?: string }) {

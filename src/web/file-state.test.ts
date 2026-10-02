@@ -1129,7 +1129,7 @@ test('missing-source status is explicit, terminal and local to the affected prob
   assert.equal(probes.snapshot(fileUrl).status, 'unavailable');
   assert.deepEqual(probes.snapshot(fileUrl).failure, { kind: 'http', status: 422, code: 'SOURCE_NOT_FOUND' });
   assert.match(probes.snapshot(fileUrl).error!, /source file was not found during capture, so no snapshot was saved/);
-  assert.match(probes.snapshot(fileUrl).error!, /new message\. Retrying only rechecks this saved result/);
+  assert.match(probes.snapshot(fileUrl).error!, /Reload explicitly synchronizes the current source/);
   assert.equal(clock.tasks.size, 0);
   off();
   probes.subscribe(fileUrl, () => {});
@@ -1144,6 +1144,103 @@ test('missing-source status is explicit, terminal and local to the affected prob
   assert.ok(calls.every(init => init.method === 'HEAD' && init.body === undefined));
   assert.equal(clock.tasks.size, 0);
   probes.dispose();
+});
+
+test('explicit synchronization coalesces clicks, posts only identity, and rechecks saved state after success', async () => {
+  const url = `${apiBase}/messages/synthetic-encoded-reference`;
+  let release!: (response: Response) => void;
+  const posted = new Promise<Response>(resolve => { release = resolve; });
+  const calls: RequestInit[] = [];
+  let ready = false;
+  const probes = new FileProbes(async (_path, init) => {
+    calls.push(init!);
+    return init?.method === 'POST' ? posted : new Response(null, { status: ready ? 200 : 422 });
+  }, apiBase);
+  probes.subscribe(url, () => {});
+  await settle();
+  const first = probes.synchronize(url);
+  await probes.synchronize(url);
+  assert.equal(calls.filter(call => call.method === 'POST').length, 1);
+  const post = calls.find(call => call.method === 'POST')!;
+  assert.deepEqual(Object.keys(JSON.parse(String(post.body))), ['operationId']);
+  assert.equal(probes.snapshot(url).synchronizing, true);
+  ready = true;
+  release(Response.json({ state: 'ready' }));
+  await first; await settle();
+  assert.equal(probes.snapshot(url).status, 'ready');
+  assert.match(probes.snapshot(url).synchronizationNote!, /不保证/);
+  await probes.synchronize(url);
+  assert.equal(calls.filter(call => call.method === 'POST').length, 1);
+  probes.dispose();
+});
+
+test('synchronization eligibility comes from explicit capture headers, not generic failures or pending timeouts', async () => {
+  for (const [status, state, code, eligible] of [
+    [404, 'missing', '', true], [422, 'failed', 'SOURCE_UNREADABLE', true],
+    [422, 'failed', 'IO_ERROR', false], [422, 'failed', 'INTERRUPTED', false],
+    [202, 'pending', '', false], [404, '', '', false], [403, '', '', false],
+  ] as const) {
+    const clock = new Clock();
+    const probes = new FileProbes(async () => new Response(null, { status,
+      headers: { 'X-File-State': state, 'X-File-Error-Code': code } }), apiBase, clock);
+    probes.subscribe(fileUrl, () => {});
+    await settle(); await clock.advance(5_000);
+    assert.equal(probes.snapshot(fileUrl).status, 'unavailable');
+    assert.equal(probes.snapshot(fileUrl).canSynchronize, eligible);
+    probes.dispose();
+  }
+});
+
+test('unknown synchronization responses retain operation identity and never retry automatically', async () => {
+  const url = `${apiBase}/messages/synthetic`;
+  const ids: string[] = [];
+  const probes = new FileProbes(async (_path, init) => {
+    if (init?.method !== 'POST') return new Response(null, { status: 422 });
+    ids.push(JSON.parse(String(init.body)).operationId);
+    if (ids.length === 1) throw new Error('network outcome unknown');
+    return Response.json({ code: 'SOURCE_NOT_FOUND', error: 'missing' }, { status: 404 });
+  }, apiBase);
+  probes.subscribe(url, () => {});
+  await settle();
+  await probes.synchronize(url);
+  assert.match(probes.snapshot(url).error!, /不会自动重试/);
+  assert.equal(ids.length, 1);
+  await probes.synchronize(url);
+  assert.equal(ids[0], ids[1]);
+  await probes.synchronize(url);
+  assert.notEqual(ids[1], ids[2], 'a definitive failure permits another explicit new attempt');
+  probes.dispose();
+});
+
+test('synchronization timeout preserves unknown identity, and disposal aborts without notifying stale views', async () => {
+  const clock = new Clock();
+  const url = `${apiBase}/messages/synthetic`;
+  const ids: string[] = [];
+  let signal: AbortSignal | undefined;
+  const probes = new FileProbes(async (_path, init) => {
+    if (init?.method !== 'POST') return new Response(null, { status: 422 });
+    ids.push(JSON.parse(String(init.body)).operationId);
+    signal = init.signal!;
+    return new Promise<Response>((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }));
+  }, apiBase, clock);
+  let notifications = 0;
+  probes.subscribe(url, () => notifications++);
+  await settle();
+  const first = probes.synchronize(url);
+  await clock.advance(35_000);
+  await first;
+  assert.equal(signal!.aborted, true);
+  assert.equal(probes.snapshot(url).synchronizing, false);
+  assert.match(probes.snapshot(url).error!, /超时|abort/i);
+  const second = probes.synchronize(url);
+  assert.equal(ids[0], ids[1]);
+  const before = notifications;
+  probes.dispose();
+  await second;
+  assert.equal(notifications, before);
+  assert.equal(signal!.aborted, true);
+  assert.equal(clock.tasks.size, 0);
+  await assert.rejects(new FileProbes(async () => new Response(), apiBase).synchronize(fileUrl), /Only local message/);
 });
 
 test('a missing-source marker never overrides authorization, storage or unclassified failures', async () => {
@@ -1188,7 +1285,7 @@ test('network errors preserve full details and require explicit retry to clear t
   await settle();
   assert.equal(requests, 2);
   assert.deepEqual(probes.snapshot(fileUrl), {
-    status: 'ready', round: 1, deadline: 15_000, mime: 'application/octet-stream',
+    status: 'ready', round: 1, deadline: 15_000, mime: 'application/octet-stream', canSynchronize: false,
   });
   assert.equal(clock.tasks.size, 0);
   probes.dispose();
@@ -1215,7 +1312,7 @@ test('HEAD 200 finishes media and ordinary metadata checks without reading bodie
     await settle();
     const snapshot = probes.snapshot(fileUrl);
     assert.deepEqual(snapshot, {
-      status: 'ready', round: 0, deadline: 5_000, mime, size: 2048,
+      status: 'ready', round: 0, deadline: 5_000, mime, size: 2048, canSynchronize: false,
     });
     assert.equal(clock.tasks.size, 0, 'HEAD success clears the deadline even for previewable MIME types');
     await clock.advance(10_000);
@@ -1320,7 +1417,7 @@ test('late aborted results cannot overwrite a resumed or explicitly retried HEAD
       assert.equal(calls[1]!.signal.aborted, false);
       calls[1]!.response.resolve(new Response(null, { headers: { 'content-type': 'text/plain' } }));
       await settle();
-      assert.deepEqual(probes.snapshot(fileUrl), { ...snapshot, status: 'ready', mime: 'text/plain' });
+      assert.deepEqual(probes.snapshot(fileUrl), { ...snapshot, status: 'ready', mime: 'text/plain', canSynchronize: false });
       assert.equal(clock.tasks.size, 0);
       await clock.advance(10_000);
       assert.equal(calls.length, 2);

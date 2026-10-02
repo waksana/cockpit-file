@@ -46,6 +46,46 @@ function gate() {
   const promise = new Promise<void>(done => { resolve = done; });
   return { promise, resolve };
 }
+
+test('reload revalidates locked failure state after a competing storage handle finishes', async t => {
+  const f = await fixture(t);
+  const peer = await f.reopen();
+  const source = join(f.parent, 'source.txt');
+  await assert.rejects(f.storage.capture('reload-race', './source.txt', source), code('SOURCE_NOT_FOUND'));
+  await writeFile(source, 'current');
+  const entered = gate();
+  const release = gate();
+  const original = filesystem.mkdir;
+  let delayed = false;
+  let failPayload = true;
+  t.mock.method(filesystem, 'mkdir', async (...args: Parameters<typeof original>) => {
+    const path = String(args[0]);
+    if (path.endsWith('/attempt') && !delayed) {
+      delayed = true;
+      entered.resolve();
+      await release.promise;
+    }
+    if (path.endsWith('/payload') && failPayload) {
+      failPayload = false;
+      throw Object.assign(new Error('injected disk failure'), { code: 'ENOSPC' });
+    }
+    return original(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const pending = f.storage.reloadCapture('reload-race', './source.txt', source, randomUUID());
+  const rejected = assert.rejects(pending, code('IO_ERROR'));
+  await entered.promise;
+  await assert.rejects(peer.reloadCapture('reload-race', './source.txt', source, randomUUID()), code('IO_ERROR'));
+  release.resolve();
+  await rejected;
+  const state = await peer.lookupCapture('reload-race', './source.txt');
+  assert.equal(state.state, 'failed');
+  if (state.state !== 'failed') assert.fail();
+  assert.equal(state.error.code, 'IO_ERROR');
+  const markers = (await readdir(join(f.root, 'files', state.fileId))).filter(name => name.startsWith('reload-'));
+  assert.equal(markers.length, 1, 'the delayed operation never reserves or overwrites the newer failure');
+});
 async function pendingUpload(storage: FileStorage, operationId: string) {
   const deadline = Date.now() + 3000;
   while (Date.now() < deadline) {

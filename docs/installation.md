@@ -18,7 +18,8 @@ Changed package bytes must not replace an existing installed identity.
 The frontend requires Web API v3, publicComponents v1, draftOwner v1,
 draftSubmission v2, UI v1, `context.uiSurfaceVersion === 1` and
 `context.createPortal`; missing capabilities fail before activation.
-The backend requires `context.host.interfaceMiddlewareVersion === 1` and
+The backend requires `context.host.interfaceMiddlewareVersion === 1`,
+`context.host.chatReadVersion === 1` and
 `context.shutdownVersion === 1` before opening storage. Package/backend API v1
 alone does not establish either capability. See [prompt ingestion](backend-design.md#prompt-ingestion).
 The bundle exports `frontendApiVersion = 3`; context/result both declare API v3.
@@ -104,8 +105,10 @@ unchanged successful main CI archive for the exact accepted commit.
 `dist/licenses/lucide.txt` 保留固定 Lucide 1.46.0 的完整 ISC 及 Feather/MIT 来源声明，
 运行时代码只包含实际使用的图标 SVG 节点，不包含整库/字体/CDN/React 依赖。
 React 与 portal 渲染器由宿主注入，
-Backend runtime code uses only Node standard libraries. SDK declarations, host code,
-Zod, native implementations and development dependencies do not ship in the archive.
+Backend runtime imports use only Node standard libraries and local modules. The
+CommonMark/GFM authorization parser is bundled into `dist/server/markdown.js`;
+its dependency licenses ship in `dist/licenses/markdown.txt`. SDK declarations,
+host code, Zod, native implementations and `node_modules` do not ship in the archive.
 The build receipt records the SDK name, exact version, registry tarball URL and
 SHA-512 integrity from the frozen lockfile and checks the installed package version.
 TypeScript 5.9.3 uses NodeNext with full declaration checking; Node types 25 and React
@@ -234,6 +237,7 @@ node --enable-source-maps apps/server/dist/module-cli.js disable cockpit-file
 | DELETE /uploads/:operationId | 明确丢弃独立上传；成功/重复成功 204，后续同操作上传 410，文件读取 404 |
 | GET/HEAD /files/<fileId>/<bodyName> | 托管原件；bodyName 必须与实际原件一致 |
 | GET/HEAD /messages/<encodedReference> | 按原生 session/message/引用绑定查找快照 |
+| POST /messages/<encodedReference> | Explicit single-reference synchronization; JSON operationId only |
 
 变更请求必须携带宿主提供的 `x-cockpit-module-digest`；前端公共 request 自动添加。
 媒体 GET/HEAD 依靠 URL 内的版本，可不带自定义 header。
@@ -250,7 +254,9 @@ HEAD ready 返回 200 和类型/长度；已知工作进行中返回 202；
 For a persisted missing-source failure, HEAD also returns
 `X-File-Error-Code: SOURCE_NOT_FOUND`; the affected card explains that no snapshot
 was saved, without reporting a module-wide runtime failure. Old failure records
-remain terminal and are not migrated or recaptured. Other failures still use their
+are not migrated or automatically recaptured. A user can explicitly
+[synchronize one failed reference](file-references.md#explicit-synchronization).
+Other failures still use their
 existing reporting paths. See [capture errors and module health](observation-and-loading.md#5-missing-sources-and-module-health)
 for the distinction between a new failed capture and an old host error replayed
 when the UI opens. Source changes do not alter the running installation or clear

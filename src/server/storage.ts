@@ -6,6 +6,7 @@ import type { BigIntStats } from 'node:fs';
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import type { ModuleHostIntentResult } from '@waksana/cockpit-module-sdk/backend';
+import { RELOADABLE_FAILURES } from '../shared/files.ts';
 
 export const DEFAULT_MAX_BYTES = 100 * 1024 * 1024;
 const BLOCK_BYTES = 64 * 1024;
@@ -64,6 +65,7 @@ export interface FileStorage {
   upload(operationId: string, stream: FileInput, name: string, mime?: string, signal?: AbortSignal): Promise<FileMetadata>;
   discardUpload(operationId: string): Promise<void>;
   capture(messageKey: string, reference: string, sourcePath: string | readonly string[], signal?: AbortSignal): Promise<FileMetadata>;
+  reloadCapture(messageKey: string, reference: string, sourcePath: string, operationId: string, signal?: AbortSignal): Promise<FileMetadata>;
   lookupFile(fileId: string): Promise<FileLookup>;
   lookupUpload(operationId: string): Promise<FileLookup>;
   lookupCapture(messageKey: string, reference: string): Promise<FileLookup>;
@@ -93,8 +95,7 @@ type OperationOwner = { pid: number; operation: string };
 type DiskMetadata = Omit<FileMetadata, 'path'> & { body: string; bodyStamp: BodyStamp; identity: Identity; version: 2 };
 type State = { state: 'pending'; owner: OperationOwner } | { state: 'failed'; error: StoredFailure };
 type Discard = { version: 1; id: string; owner: OperationOwner };
-type CaptureSource = { paths: readonly string[] };
-
+type CaptureSource = { paths: readonly string[]; reloadId?: string };
 export const WSL2_GUIDE_URL = 'https://github.com/waksana/cockpit/blob/main/docs/install.md#windows-wsl2';
 
 export function unsupportedPlatformMessage(platform: string): string {
@@ -534,6 +535,8 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
     let attempt: FileHandle | undefined;
     let attemptOwned = false;
     let committed = false;
+    const reloadId = 'paths' in input ? input.reloadId : undefined;
+    let reloadReserved = false;
     try {
       if (await discarded(handle, id)) throw failure('DISCARDED', 'Upload operation was permanently discarded');
       const previousIdentity = parseIdentity(await readJson(handle, 'identity.json'));
@@ -545,15 +548,15 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
         committed = true;
         return publicMetadata(saved);
       }
-      const state = await readJson(handle, 'state.json');
+      let state = await readJson(handle, 'state.json');
       if (!object(state) || (state.state !== 'pending' && state.state !== 'failed')) throw failure('CORRUPT', 'Invalid operation state');
       if (state.state === 'failed' && identity.kind === 'capture') {
         if (!object(state.error) || typeof state.error.code !== 'string' || typeof state.error.message !== 'string') {
           throw failure('CORRUPT', 'Invalid capture failure');
         }
-        throw failure(state.error.code, state.error.message);
+        if (!reloadId || !RELOADABLE_FAILURES.has(state.error.code)) throw failure(state.error.code, state.error.message);
       }
-      if (!created && identity.kind === 'capture') {
+      if (!created && identity.kind === 'capture' && !(reloadId && state.state === 'failed')) {
         const existing = await lookupState(handle, id);
         if (existing.state === 'ready') { committed = true; return existing.file; }
         throw failure(existing.state === 'pending' ? 'PENDING' : existing.error.code,
@@ -569,10 +572,35 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
         throw error;
       }
       attempt = await directory(fdPath(handle, 'attempt'));
+      if (reloadId) {
+        const current = await metadata(handle, id);
+        if (current) { committed = true; return publicMetadata(current); }
+        state = await readJson(handle, 'state.json');
+        if (!object(state) || (state.state !== 'pending' && state.state !== 'failed')) {
+          throw failure('CORRUPT', 'Invalid operation state under synchronization lock');
+        }
+        if (!created && state.state !== 'failed') {
+          throw failure('ACTIVITY_UNKNOWN', 'Capture state changed before synchronization; no source was reopened');
+        }
+        if (state.state === 'failed') {
+          if (!object(state.error) || typeof state.error.code !== 'string' || typeof state.error.message !== 'string') {
+            throw failure('CORRUPT', 'Invalid capture failure under synchronization lock');
+          }
+          if (!RELOADABLE_FAILURES.has(state.error.code)) throw failure(state.error.code, state.error.message);
+        }
+        const record = `reload-${reloadId}.json`;
+        try {
+          await readJson(handle, record);
+          throw failure('RELOAD_REPLAY', 'This synchronization attempt already ran; inspect its saved file state');
+        } catch (error) { if (!hasCode(error, 'ENOENT')) throw error; }
+        await writeJson(handle, record, { version: 1, operationId: reloadId, previousState: state, startedAt: new Date().toISOString() });
+        reloadReserved = true;
+      }
       if (await discarded(handle, id)) throw failure('DISCARDED', 'Upload operation was permanently discarded');
       const concurrentlyCommitted = await metadata(handle, id);
       if (concurrentlyCommitted) {
         committed = true;
+        if ('paths' in input) return publicMetadata(concurrentlyCommitted);
         const verified = await consume(input as FileInput, maxBytes, signal);
         if (verified.size !== concurrentlyCommitted.size || verified.sha256 !== concurrentlyCommitted.sha256 ||
             verified.mime !== concurrentlyCommitted.mime) {
@@ -660,7 +688,7 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
           cause: reason, fileId: id, committed: true,
         });
       }
-      if (attemptOwned && !committed && !await discarded(handle, id)) {
+      if (attemptOwned && !committed && (!reloadId || reloadReserved) && !await discarded(handle, id)) {
         try { await writeJson(handle, 'state.json', { state: 'failed', error: { code: reason.code, message: reason.message } } satisfies State); }
         catch (recordError) {
           throw new FileStorageError('STATE_UNCERTAIN', 'Operation failed and its failure record could not be persisted', {
@@ -803,6 +831,15 @@ export async function createFileStorage(options: FileStorageOptions): Promise<Fi
       return schedule({
         kind: 'capture', messageKey: key(messageKey, 'messageKey'), reference: key(reference, 'reference'), name: nameOf(basename(paths[0]!)),
       }, { paths }, signal);
+    },
+    reloadCapture(messageKey, reference, sourcePath, operationId, signal) {
+      if (!/^[a-f0-9-]{36}$/.test(operationId) || !isAbsolute(sourcePath)) {
+        throw failure('INVALID_INPUT', 'Synchronization requires an operation identity and an absolute verified source');
+      }
+      return schedule({
+        kind: 'capture', messageKey: key(messageKey, 'messageKey'), reference: key(reference, 'reference'),
+        name: nameOf(basename(sourcePath)),
+      }, { paths: [key(sourcePath, 'sourcePath')], reloadId: operationId }, signal);
     },
     lookupFile,
     async managedPath(path) {

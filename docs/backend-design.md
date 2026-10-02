@@ -18,6 +18,8 @@ Native local file -> public prompt middleware -> managed copy -> native send
 
 只处理文件模块实际加载启用后的新上传、新实时消息。
 历史浏览仅读取已有文件，不补捕获、不扫描历史、不做旧数据兼容。
+The separate user-triggered [reference synchronization](file-references.md#explicit-synchronization)
+endpoint verifies one exact reference through bounded public history before copying.
 全局文件库、汉堡菜单管理页、列表搜索和管理删除接口在 [Roadmap](roadmap.md)，本次不做。
 
 ## 2. Cockpit 本体提供三组通用能力
@@ -143,7 +145,8 @@ feed(delta)
 不猜目录优先级、不全盘搜索。工作区上下文未知时有界延后，到完整消息仍未知则报告。
 URL 身份保持原始 Markdown 引用，不把解析出的绝对路径反写给前端或 Agent。
 按用户确认，来源允许服务用户可读的所有本地普通文件，包括本地符号链接目标。
-只有新实时消息中的引用可触发捕获；HTTP 读取不能借此请求任意路径复制，也不抓取网络 URL。
+Real-time observation and the explicitly authorized synchronization endpoint can
+capture references. HTTP reads cannot request arbitrary path copies; no network URL is fetched.
 托管数据的读取仍拒绝路径逃逸和符号链接替换。
 不自动收集工具内部图片、思考或代码示例。
 

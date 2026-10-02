@@ -50,8 +50,8 @@ version, sequence and archive name. `scripts/rolling-identity.mjs` derives the m
 API range from the manifest and checks the actual frontend/draft/storage contracts.
 File requires backend/module API 1, frontend API 3, UI/surface 1, composer input 1,
 draft lifecycle 1, draft submission 2, public components 1, draft owner 1,
-interface middleware 1 and shutdown 1 capabilities. It wraps the public `prompt`
-interface and invokes no additional host intents.
+interface middleware 1, shutdown 1 and chat read 1 capabilities. It wraps the public
+`prompt` interface and invokes `session/chat` only for explicit reference synchronization.
 Storage is ordinary file bodies with version-2 metadata, not SQLite: databases and
 migrations are empty. This does not authorize deletion, recapture, migration or
 weakening retention of existing snapshots and drafts. Changes to these contracts
