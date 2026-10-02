@@ -1651,7 +1651,7 @@ test('Markdown links and images stay inline regardless of labels, line breaks or
   }
 });
 
-test('inline errors retain one link and expose the complete cause and retry only in the dialog', async t => {
+test('inline errors retain one link and expose an adjacent explicit synchronization button', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100 });
   const h = harness();
   const frontend = await activate(h.context);
@@ -1663,13 +1663,13 @@ test('inline errors retain one link and expose the complete cause and retry only
   const failed = render();
   assert.equal(failed.props.className, 'cf-reference');
   assert.equal(descendants(failed).filter(element => element.type === 'a').length, 1);
-  assert.equal(descendants(failed).some(element => element.type === 'button'), false);
+  assert.ok(descendants(failed).some(element => element.props['aria-label'] === '同步文件 Same name'));
   const link = descendants(failed).find(element => element.type === 'a')!;
   assert.match(String(link.props['aria-description']), /availability is still unknown/);
   openFile(failed);
   const dialog = descendants(render()).find(element => element.type === 'dialog')!;
   assert.match(JSON.stringify(dialog), /availability is still unknown/);
-  assert.ok(descendants(dialog).some(element => element.props['aria-label'] === '重新加载 Same name'));
+  assert.ok(descendants(dialog).some(element => element.props['aria-label'] === '同步文件 Same name'));
   h.unmount(); frontend.dispose?.();
 });
 
@@ -1693,13 +1693,13 @@ test('missing-source details stay on the affected reference without reporting mo
   tree = render();
   const dialog = descendants(tree).find(element => element.type === 'dialog')!;
   assert.match(textContent(dialog), /no snapshot was saved/);
-  assert.match(textContent(dialog), /new message\. Retrying only rechecks this saved result/);
+  assert.match(textContent(dialog), /Reload explicitly synchronizes the current source/);
   assert.equal(descendants(dialog).some(element => ['a', 'img', 'video', 'audio'].includes(String(element.type))), false);
   const retry = descendants(dialog).find(element => element.props.className === 'cf-dialog-retry')!;
   click(descendants(retry).find(element => element.type === 'button')!);
   await settle();
   assert.equal(h.calls.length, 2);
-  assert.ok(h.calls.every(call => call.init?.method === 'HEAD'));
+  assert.deepEqual(h.calls.map(call => call.init?.method), ['HEAD', 'POST']);
   assert.deepEqual(h.errors, []);
   h.unmount(); frontend.dispose?.();
 });

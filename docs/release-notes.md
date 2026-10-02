@@ -1,5 +1,11 @@
 # Cockpit File 0.0.0-dev
 
+- Add an adjacent reload control to failed local Markdown file references.
+  Explicit synchronization verifies the exact native message/reference through
+  bounded public persisted history and saves current source bytes, never replacing
+  ready snapshots or automatically retrying unknown outcomes. Require chatRead v1.
+- Keep HTTP/HTTPS images on the Host's intentional text fallback; no remote fetch,
+  proxy or preview is introduced. No production backfill or storage migration occurs.
 - Use published SDK 0.17.0 and frontend API v3 with publicComponents v1,
   draftOwner v1 and draftSubmission v2. The integration host is pinned to
   `f520eb51646b26cf166ca37987fd5fd5b4dbc8f5`.

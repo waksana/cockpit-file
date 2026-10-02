@@ -17,6 +17,7 @@
     files/<fileId>/
       identity.json           上传操作或消息捕获身份
       state.json              在途/失败记录
+      reload-<UUID>.json       Explicit attempt identity and prior failure evidence
       attempt/                独占工作目录；未提交的 payload 在此
       ready/                  原件和 metadata.json 原子发布
       discarded.json          明确丢弃上传后保留的小型终态标记
@@ -105,6 +106,9 @@ SHA-256 在上传/复制流经过时计算，记录实际保存字节的摘要�
 已中断或无法确认所有权的旧 pending 记录以 INTERRUPTED/ACTIVITY_UNKNOWN 反馈，
 不持续回读源文件来声称恢复了原版本。
 首版不从历史阅读或资源 GET 触发任何补捕获。
+An explicit [synchronization POST](file-references.md#explicit-synchronization)
+can retry definite source failures with a new operation ID. It preserves prior
+failure evidence and never takes over unknown ownership or replaces ready bytes.
 
 ## 6. 失败表现
 

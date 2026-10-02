@@ -22,7 +22,7 @@ async function fixture(t: TestContext, config: Record<string, unknown> = {}) {
   const open = () => activate({
     apiVersion: 1, moduleId: 'cockpit-file', dataRoot: join(root, 'data'),
     serviceReadyVersion: 1, shutdownVersion: 1, stopping: controller.signal,
-    host: { interfaceMiddlewareVersion: 1, call() { assert.fail('File does not call host intents'); } },
+    host: { interfaceMiddlewareVersion: 1, chatReadVersion: 1, call() { assert.fail('Unexpected host intent'); } },
     apiBase: '/_modules/cockpit-file/fixed-digest/api', config, signal: controller.signal,
     report: error => { errors.push(error); },
     invalidate() {}, publish() { assert.fail('File does not publish module events'); },

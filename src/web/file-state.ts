@@ -453,6 +453,8 @@ export interface ProbeSnapshot {
   readonly mime?: string;
   readonly size?: number;
   readonly error?: string;
+  readonly synchronizing?: boolean;
+  readonly synchronizationNote?: string;
   readonly failure?: { kind: 'timeout' } | { kind: 'network' }
     | { kind: 'http'; status: number; code?: 'SOURCE_NOT_FOUND' };
 }
@@ -471,6 +473,8 @@ interface ProbeEntry {
   retryTimer?: unknown;
   nextAt: number;
   attempts: number;
+  reloadController?: AbortController;
+  reloadId?: string;
 }
 
 const browserClock: ProbeClock = {
@@ -541,6 +545,55 @@ export class FileProbes {
     this.resume(url, entry);
   }
 
+  async synchronize(url: string): Promise<void> {
+    if (this.disposed) return;
+    const path = fileRequestPath(this.apiBase, url);
+    if (!path.startsWith('/messages/')) throw new Error('Only local message references can be synchronized');
+    const entry = this.entry(url);
+    if (entry.reloadController || entry.snapshot.status === 'ready') return;
+    this.pause(entry);
+    const controller = new AbortController();
+    entry.reloadController = controller;
+    const timeout = this.clock.setTimeout(() => controller.abort(new Error('同步回执超时，结果未知')), 35_000);
+    try {
+      entry.reloadId ??= crypto.randomUUID();
+      entry.snapshot = { ...entry.snapshot, synchronizing: true, error: undefined };
+      this.notify(entry);
+      const response = await this.request(path, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operationId: entry.reloadId }), signal: controller.signal,
+      });
+      if (this.disposed) return;
+      controller.signal.throwIfAborted();
+      const payload: unknown = JSON.parse(await readBounded(response, 8_192));
+      if (this.disposed) return;
+      controller.signal.throwIfAborted();
+      if (response.status !== 200 || !payload || typeof payload !== 'object' || !('state' in payload) || payload.state !== 'ready') {
+        const code = payload && typeof payload === 'object' && 'code' in payload ? payload.code : undefined;
+        const detail = payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string' ? payload.error : '';
+        // Definitive failures allow a new explicit attempt. Unknown responses retain the same ID.
+        if (typeof code === 'string' && ['SOURCE_NOT_FOUND', 'SOURCE_UNREADABLE', 'INVALID_SOURCE', 'LIMIT_EXCEEDED',
+          'SOURCE_CHANGED', 'AMBIGUOUS_SOURCE', 'ABORTED', 'REFERENCE_MISMATCH', 'RELOAD_REPLAY',
+          'CONTEXT_UNAVAILABLE', 'HISTORY_LIMIT'].includes(code)) entry.reloadId = undefined;
+        throw new Error(`同步未完成 (${response.status})${detail ? `：${detail}` : '，结果未知；再次点击只核对同一次操作'}`);
+      }
+      entry.reloadId = undefined;
+      entry.snapshot = { ...entry.snapshot, synchronizing: false };
+      this.retry(url);
+      entry.snapshot = { ...entry.snapshot,
+        synchronizationNote: '文件已同步；保存的是捕获时源文件的内容，不保证与原消息发送时相同。' };
+      this.notify(entry);
+    } catch (error) {
+      if (this.disposed) return;
+      entry.snapshot = { ...entry.snapshot, status: 'unavailable', synchronizing: false,
+        error: `${message(error)}。未确认时不会自动重试。` };
+      this.notify(entry);
+    } finally {
+      this.clock.clearTimeout(timeout);
+      entry.reloadController = undefined;
+    }
+  }
+
   private active(entry: ProbeEntry): boolean {
     return !this.disposed && this.visible && entry.listeners.size > 0;
   }
@@ -598,7 +651,7 @@ export class FileProbes {
       } else if (response.status === 422 && response.headers.get('x-file-state') === 'failed'
                  && response.headers.get('x-file-error-code') === 'SOURCE_NOT_FOUND') {
         this.fail(entry,
-          'The source file was not found during capture, so no snapshot was saved. Once the file exists, ask the assistant to share it in a new message. Retrying only rechecks this saved result.',
+          'The source file was not found during capture, so no snapshot was saved. Reload explicitly synchronizes the current source; retrying preview only checks the saved state.',
           { kind: 'http', status: 422, code: 'SOURCE_NOT_FOUND' });
       } else if ((response.status === 202 || response.status === 404) &&
                  response.headers.get('x-file-state') !== 'failed') {
@@ -639,6 +692,7 @@ export class FileProbes {
     if (this.disposed) return;
     this.disposed = true;
     for (const entry of this.entries.values()) {
+      entry.reloadController?.abort();
       this.pause(entry);
       entry.listeners.clear();
     }

@@ -144,13 +144,17 @@ Opaque saved namespaces are not evidence of sending or deletion.
 Markdown 引用使用带真实资源 href 的 `a`，继承正文的字号和行高，无固定高度或上下 padding。
 类型图标和固定尺寸的状态图标不撑高文字行；完整名称随正文自然折行，
 无断点长路径允许字符间折行，不使用不可拆分的胶囊、卡片或省略整个引用。
-折行后的各段是同一条链接，不因加载而追加大小、按钮或“加载中”文字。
+Wrapped segments remain one link. Loading adds no toolbar; a failed local message
+reference adds only an adjacent explicit synchronization button, outside the link.
 普通点击/Enter 打开模块预览，Ctrl/Meta/Shift/中键等保留原生链接行为。
 完整错误与下载/重试在弹窗里呈现；不能通过只支持 hover 的提示隐藏它们。
 
 错误有短状态、可访问描述和可打开的完整原因；“检查超时”表示状态未确认，
 不等于捕获失败或原件丢失。已确认 ready 的原件在预览失败后仍可下载。
-失败不自动弹窗、不撑开附件行；每项保留自己的重试，重试不补抓历史。
+Failures never open a modal automatically or expand attachment rows. Preview retries
+only recheck saved resources. The separate local-reference synchronization button
+also appears in the detail dialog, disables during its request, and reports the
+current-source version semantics. See [explicit synchronization](file-references.md#explicit-synchronization).
 正常焦点返回与键盘焦点可见性保留，独立行的主体轮廓位于其内部。
 预览首次焦点由 `showModal()` 选择首个关闭按钮，不额外使用 React `autoFocus`。
 仅保留两种移除控件的连续性处理：弹窗内当前聚焦的重试控件被替换前移至稳定关闭按钮；

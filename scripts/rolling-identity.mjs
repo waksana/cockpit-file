@@ -47,6 +47,7 @@ export async function deploymentDescriptor(root, identity) {
   assert.match(backend, /context\.shutdownVersion !== 1/);
   assert.match(backend, /onStop: dispose/);
   assert.match(backend, /middleware: \{ prompt:/);
+  assert.match(backend, /context\.host\.chatReadVersion !== 1/);
   const { repository, tag, sourceSha, version, sequence } = identity;
   return {
     format: 2, channel: 'rolling', repository, tag, sourceSha, version, sequence,
@@ -55,8 +56,8 @@ export async function deploymentDescriptor(root, identity) {
       kind: 'module', id: manifest.id, hostApi: { min: manifest.apiVersion, max: manifest.apiVersion },
       requiresCapabilities: ['module-api.v1', 'frontend-api.v3', 'ui.v1', 'uiSurface.v1',
         'composerInput.v1', 'draftLifecycle.v1', 'draftSubmission.v2', 'publicComponents.v1', 'draftOwner.v1',
-        'interfaceMiddleware.v1', 'shutdown.v1'],
-      requiredIntents: [], databases: [], migrations: [],
+        'interfaceMiddleware.v1', 'shutdown.v1', 'chatRead.v1'],
+      requiredIntents: ['session/chat'], databases: [], migrations: [],
     },
   };
 }

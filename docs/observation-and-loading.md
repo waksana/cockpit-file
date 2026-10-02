@@ -190,11 +190,14 @@ errors and other unexpected capture failures keep their existing reporting paths
 
 There is no automatic retry of a terminal capture. Reopening the page, repeated
 deltas, historical completions and manual status checks cannot reopen its source.
-Once the source is available, the assistant must reference it in a new message to
-create a new capture identity. Already-saved snapshots remain available after
+Once the source is available, the user can explicitly
+[synchronize the failed reference](file-references.md#explicit-synchronization),
+or the assistant can reference it in a new message to create a new capture identity.
+Already-saved snapshots remain available after
 their original source disappears. Older `SOURCE_NOT_FOUND` records, including
 those with the message `Cannot open capture source`, receive the same scoped
-feedback without deleting or rewriting their records.
+feedback. Explicit synchronization retains prior failure evidence before retrying;
+ordinary reads do not modify those records.
 
 The observed host's [runtime-error map](https://github.com/waksana/cockpit/blob/ae6fa428ba7192ee2b82ee8b660685f1445a8d77/apps/server/src/module-host.ts#L112-L138)
 retains its latest module runtime error, and the
