@@ -451,6 +451,7 @@ export interface ProbeSnapshot {
   readonly round: number;
   readonly deadline: number;
   readonly mime?: string;
+  readonly documentKind?: 'markdown' | 'html';
   readonly size?: number;
   readonly error?: string;
   readonly synchronizing?: boolean;
@@ -646,8 +647,10 @@ export class FileProbes {
         const mime = response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() || 'application/octet-stream';
         const length = response.headers.get('content-length');
         const size = length !== null && /^\d+$/.test(length) ? Number(length) : undefined;
+        const documentKind = response.headers.get('x-file-preview');
         entry.snapshot = {
           ...entry.snapshot, status: 'ready', mime,
+          ...(documentKind === 'markdown' || documentKind === 'html' ? { documentKind } : {}),
           ...(size !== undefined && Number.isSafeInteger(size) ? { size } : {}),
         };
         this.pause(entry);
