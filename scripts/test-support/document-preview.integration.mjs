@@ -12,13 +12,15 @@ const Fastify = require('fastify');
 const { moduleFixture } = await load('apps/server/src/test-support/module-fixture.ts');
 const { ModuleHost } = await load('apps/server/src/module-host.ts');
 const { installLocalModule } = await load('apps/server/src/module-install.ts');
+const { harness } = await load('packages/core/test-support/engine-harness.ts');
 
 test('packaged document renderer preserves Host routing and CSP while keeping original downloads', async t => {
   const f = await moduleFixture(t);
+  const h = harness(t);
   await installLocalModule(resolve(process.env.COCKPIT_FILE_MODULE_ARCHIVE),
     { hostRoot: f.hostRoot, trustLocalCode: true, enable: true });
   const app = Fastify();
-  const host = new ModuleHost({ hostRoot: f.hostRoot, host: { call() { assert.fail('Preview must not call native APIs'); } } });
+  const host = new ModuleHost({ hostRoot: f.hostRoot, observer: h.engine, host: { call() { assert.fail('Preview must not call native APIs'); } } });
   await host.register(app);
   await app.ready();
   t.after(async () => { await host.close(); await app.close(); });
