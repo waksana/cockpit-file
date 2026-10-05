@@ -9,6 +9,7 @@ import { decodeNativeBlob, unavailableBlobReason, type NativeBlob } from './blob
 import { icons } from './icons.ts';
 import { acceptsFiles, canRemoveFile, type FileComposerContext, type FileDraft } from './file-draft.ts';
 import { createFileServices } from './file-services.ts';
+import { loadDocument } from './document.ts';
 
 export const frontendApiVersion = 3;
 
@@ -151,7 +152,28 @@ export const activate: ActivateFrontend = context => {
   interface Preview {
     url: string;
     key: string;
-    kind: 'image' | 'video' | 'audio';
+    kind: 'image' | 'video' | 'audio' | 'markdown' | 'html';
+  }
+
+  function DocumentPreview({ preview, name, result }: {
+    preview: Preview; name: string; result: (ready: boolean, error?: string) => void;
+  }) {
+    const [html, setHtml] = React.useState<string>();
+    React.useEffect(() => {
+      const controller = new AbortController();
+      const signal = AbortSignal.any([controller.signal, context.signal, AbortSignal.timeout(5_000)]);
+      void loadDocument(context, preview.url, signal).then(text => {
+        if (!signal.aborted) setHtml(text);
+      }).catch(error => {
+        if (controller.signal.aborted || context.signal.aborted) return;
+        context.report(error);
+        result(false, error instanceof Error ? error.message : '文档预览失败，原件仍可下载。');
+      });
+      return () => controller.abort();
+    }, [preview.url]);
+    return html !== undefined ? <iframe className="cf-document" title={`预览 ${name}`}
+      sandbox="allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer"
+      srcDoc={html} onLoad={() => result(true)} /> : <p role="status">正在渲染文档…</p>;
   }
 
   interface MediaRun {
@@ -181,7 +203,8 @@ export const activate: ActivateFrontend = context => {
     const mediaError = currentMedia?.status === 'failed' ? currentMedia.error : undefined;
     const mediaLoading = !!mediaKey && (!currentMedia || currentMedia.status === 'pending');
     const failure = error || mediaError;
-    const label = preview ? `${preview.kind === 'image' ? '查看' : '播放'} ${name}` : `文件详情：${name}`;
+    const documentPreview = preview?.kind === 'markdown' || preview?.kind === 'html';
+    const label = preview ? `${preview.kind === 'video' || preview.kind === 'audio' ? '播放' : '查看'} ${name}` : `文件详情：${name}`;
     const suffix = /(?:\.tar\.(?:gz|bz2|xz|zst)|\.[a-z0-9]{1,10})$/i.exec(name);
     const extension = suffix && suffix.index > 0 ? suffix[0] : '';
     const stem = extension ? name.slice(0, -extension.length) : name;
@@ -197,7 +220,7 @@ export const activate: ActivateFrontend = context => {
       setMedia(undefined);
       setExpanded({ identity, revision: ++sequence.current });
     };
-    const mediaResult = (key: string | undefined, ready: boolean) => {
+    const mediaResult = (key: string | undefined, ready: boolean, detail?: string) => {
       const active = run.current;
       if (!active || active.key !== key || context.signal.aborted || active.status === 'failed' ||
           (ready && active.status === 'ready')) return;
@@ -205,9 +228,9 @@ export const activate: ActivateFrontend = context => {
       const timedOut = ready && Date.now() >= active.deadline;
       active.status = ready && !timedOut ? 'ready' : 'failed';
       setMedia({ resource: active.resource, status: active.status,
-        ...(active.status === 'failed' ? { error: timedOut
+        ...(active.status === 'failed' ? { error: detail || (timedOut
           ? '预览加载超时，原件仍可下载。可以重试预览。'
-          : '图片或媒体未能显示，原件仍可下载。可以重试预览。' } : {}) });
+          : '文件未能显示，原件仍可下载。可以重试预览。') } : {}) });
     };
     React.useLayoutEffect(() => {
       if (!mediaKey || !preview || context.signal.aborted) return;
@@ -296,8 +319,12 @@ export const activate: ActivateFrontend = context => {
           {failure && <p className="cf-error" role="alert">{failure}</p>}
           {busy && <p role="status">{status || '正在检查文件状态…'}</p>}
           {!busy && !preview && !failure && <p>此类型暂不支持预览。{downloadUrl ? '可以下载原件查看。' : ''}</p>}
+          {documentPreview && <p>静态单文件预览：脚本、表单和联网资源已禁用；不读取同目录图片或样式。
+            仅显示内嵌图片，外部/相对图片会标注不可用。排版可能与原网页不同；外部链接需点击后在新标签页打开。</p>}
         </div>
-        {preview && !mediaError && (preview.kind === 'image' ? <img key={mediaKey} className="cf-expanded-media"
+        {preview && !mediaError && (documentPreview ? <DocumentPreview key={mediaKey} preview={preview} name={name}
+          result={(ready, detail) => mediaResult(mediaKey, ready, detail)} />
+          : preview.kind === 'image' ? <img key={mediaKey} className="cf-expanded-media"
           src={preview.url} alt={name} onLoad={() => mediaResult(mediaKey, true)} onError={() => mediaResult(mediaKey, false)} />
           : preview.kind === 'video' ? <video key={mediaKey} className="cf-expanded-media" src={preview.url} aria-label={name}
             controls preload="metadata" onLoadedMetadata={() => mediaResult(mediaKey, true)} onError={() => mediaResult(mediaKey, false)} />
@@ -310,6 +337,7 @@ export const activate: ActivateFrontend = context => {
               closeButton.current?.focus({ preventScroll: true });
             }
           }}>{retryAction}</span>}
+          {documentPreview && <a className="ck-button" href={`${preview.url}?preview=1`} target="_blank" rel="noopener noreferrer">新标签页打开</a>}
           {downloadAction}{actions}
         </div>
       </dialog>, page.body)}
@@ -331,7 +359,7 @@ export const activate: ActivateFrontend = context => {
       React.useCallback(listener => probes.subscribe(url, listener), [url]),
       React.useCallback(() => probes.snapshot(url), [url]),
     );
-    const kind = state.mime ? previewKind(state.mime) : null;
+    const kind = state.documentKind ?? (state.mime ? previewKind(state.mime) : null);
     const loading = state.status === 'pending';
     const bytes = state.size ?? size;
     const checkErrorLabel = state.failure?.kind === 'timeout' ? '检查超时'
@@ -345,7 +373,7 @@ export const activate: ActivateFrontend = context => {
         aria-label={`同步文件 ${name}`} onClick={() => { void probes.synchronize(url); }}>
         <ActionIcon name="retry" />
       </button>;
-    return <FileTile name={name} identity={url} href={url} inline={inline} busy={state.synchronizing || (busy ?? loading)}
+    return <FileTile name={name} identity={url} href={state.documentKind ? `${url}?preview=1` : url} inline={inline} busy={state.synchronizing || (busy ?? loading)}
       synchronize={synchronize}
       status={state.synchronizing ? '正在同步文件' : status || state.synchronizationNote || (loading ? '检查中' : undefined)}
       size={bytes} metadata={bytes === undefined ? state.mime : undefined}

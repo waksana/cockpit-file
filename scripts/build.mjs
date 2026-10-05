@@ -33,12 +33,21 @@ const markdown = await build({
   absWorkingDir: root, entryPoints: ['src/server/markdown.ts'], outfile: 'dist/server/markdown.js',
   bundle: true, platform: 'node', format: 'esm', target: 'node24', metafile: true, legalComments: 'eof',
 });
+const renderer = await build({
+  absWorkingDir: root, entryPoints: ['src/server/preview-worker.ts'], outfile: 'dist/server/preview-worker.cjs',
+  bundle: true, platform: 'node', format: 'cjs', target: 'node24', metafile: true, legalComments: 'eof',
+});
+await rm(resolve(root, 'dist/server/preview-worker.js'));
+await rm(resolve(root, 'dist/server/document-renderer.js'));
 const packages = new Set();
-for (const input of Object.keys(markdown.metafile.inputs)) {
+for (const input of new Set([...Object.keys(markdown.metafile.inputs), ...Object.keys(renderer.metafile.inputs)])) {
   if (!input.includes('node_modules/')) continue;
   let directory = dirname(resolve(root, input));
   while (directory !== root) {
-    if ((await readdir(directory)).includes('package.json')) break;
+    if ((await readdir(directory)).includes('package.json')) {
+      const manifest = JSON.parse(await readFile(resolve(directory, 'package.json'), 'utf8'));
+      if (typeof manifest.name === 'string' && typeof manifest.version === 'string') break;
+    }
     directory = dirname(directory);
   }
   if (directory === root) throw new Error(`Cannot locate dependency license for ${input}`);

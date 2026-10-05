@@ -11,6 +11,8 @@ import { createWorkLimit } from './work.ts';
 import { displayVersion } from '../shared/version.ts';
 import { promptMiddleware } from './prompt.ts';
 import { reloadSource } from './reload.ts';
+import { documentKind, DOCUMENT_CSP, MAX_PREVIEW_BYTES } from '../shared/documents.ts';
+import { readDocument, renderIsolated } from './preview.ts';
 
 interface MessageState {
   sessionId: string;
@@ -95,6 +97,7 @@ function fileHeaders(file: FileMetadata, download: boolean): Record<string, stri
     'Accept-Ranges': 'bytes',
     ETag: `"${file.sha256}"`,
     'X-File-State': 'ready',
+    ...(documentKind(file) ? { 'X-File-Preview': documentKind(file)! } : {}),
   };
 }
 
@@ -273,6 +276,35 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
         'X-File-Error-Code': result.error.code,
       }, body: head ? undefined : { code: result.error.code, error: result.error.message } };
       const headers = fileHeaders(result.file, request.query.download === '1');
+      if (request.query.preview === '1' && request.query.download !== '1') {
+        const kind = documentKind(result.file);
+        if (!kind) throw new FileStorageError('INVALID_SOURCE', 'This file does not support document preview.');
+        if (result.file.size > MAX_PREVIEW_BYTES) throw new FileStorageError('LIMIT_EXCEEDED', 'Document preview is limited to 2 MiB; download the original.');
+        return await work.run(async () => {
+          const opened = await storage.openFile(result.file.id);
+          const signal = AbortSignal.any([request.signal, stopped]);
+          const abort = () => opened.stream.destroy(new Error('Document preview aborted'));
+          signal.addEventListener('abort', abort, { once: true });
+          try {
+            signal.throwIfAborted();
+            const text = await readDocument(opened.stream, signal);
+            const html = await renderIsolated(text, kind, result.file.name, String(request.headers.host ?? ''), signal);
+            return { headers: {
+              'Content-Type': 'text/html; charset=utf-8',
+              'Content-Disposition': 'inline',
+              'Content-Length': String(Buffer.byteLength(html)),
+              'Content-Security-Policy': DOCUMENT_CSP,
+              'X-Content-Type-Options': 'nosniff',
+              'Referrer-Policy': 'no-referrer',
+              'Cache-Control': 'no-store',
+              'X-File-Preview': kind,
+            }, body: head ? undefined : html };
+          } finally {
+            signal.removeEventListener('abort', abort);
+            opened.stream.destroy();
+          }
+        }, request.signal);
+      }
       if (head) return { headers };
       const rangeHeader = request.headers.range;
       const ifRange = request.headers['if-range'];

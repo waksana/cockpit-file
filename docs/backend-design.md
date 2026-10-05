@@ -176,6 +176,8 @@ URL 可确定性生成，不代表后端一定有文件；未捕获的旧引用�
 字节服务负责 Content-Type、Content-Disposition、长度、Range 和合适的缓存策略。
 展示名不影响磁盘寻址；危险内容不能作为拥有宿主权限的页面执行。
 浏览器预览与模型附件输入分开，不把大文件放进 JSON/SSE。
+The opt-in `?preview=1` representation is separate from original byte serving;
+see [document previews](document-preview.md) for sanitization, response CSP and limits.
 
 ## 4. 最小 HTTP 能力
 
