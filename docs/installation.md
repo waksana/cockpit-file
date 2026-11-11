@@ -233,6 +233,7 @@ node --enable-source-maps apps/server/dist/module-cli.js disable cockpit-file
 
 | 接口 | 用途 |
 | --- | --- |
+| GET /state | Live aggregate scanner diagnostics only; no message bodies, paths or identities |
 | POST /upload?name=…&operationId=… | application/octet-stream 上传；可带 x-file-mime 提示，实际类型由字节判断 |
 | DELETE /uploads/:operationId | 明确丢弃独立上传；成功/重复成功 204，后续同操作上传 410，文件读取 404 |
 | GET/HEAD /files/<fileId>/<bodyName> | 托管原件；bodyName 必须与实际原件一致 |
