@@ -18,12 +18,15 @@ interface MessageState {
   cwd: string | null;
   workspacePath?: string | null;
   owner: string;
-  scanner: MarkdownScanner;
-  hash: Hash;
-  length: number;
+  stream?: {
+    scanner: MarkdownScanner;
+    hash: Hash;
+    length: number;
+    diagnosticsSeen: number;
+  };
+  complete: boolean;
   targets: Set<string>;
   touched: number;
-  diagnosticsSeen: number;
   deferred: Map<string, string | null>;
 }
 
@@ -133,6 +136,13 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
   const captures = new Set<string>();
   const reloads = new Set<string>();
   const messages = new Map<string, MessageState>();
+  const active = new Map<string, MessageState>();
+  const maxObservedMessages = maxActiveMessages * 4;
+  const observationTtl = 30 * 60_000;
+  const diagnostics = {
+    idleReleased: 0, capacityReleased: 0, releasedWithCandidate: 0,
+    releasedWithDeferred: 0, forgottenMessages: 0, lateFinals: 0,
+  };
   const keyOf = (sessionId: string, messageId: string) => JSON.stringify([sessionId, messageId]);
   let disposed = false;
   let closing: Promise<void> | undefined;
@@ -160,10 +170,29 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
       captureReference(state, target, state.cwd);
     }
   };
+  const release = (state: MessageState, reason?: 'idle' | 'capacity') => {
+    if (!state.stream) return;
+    if (reason) {
+      diagnostics[reason === 'idle' ? 'idleReleased' : 'capacityReleased']++;
+      if (state.stream.scanner.pendingCandidate) diagnostics.releasedWithCandidate++;
+      if (state.deferred.size) diagnostics.releasedWithDeferred++;
+    }
+    state.stream.scanner.finish();
+    state.stream = undefined;
+    active.delete(keyOf(state.sessionId, state.messageId));
+  };
   const finish = (state: MessageState) => {
-    state.scanner.finish();
+    release(state);
     if (state.deferred.size) report(new Error('Native workspace context unavailable; relative artifact references were not captured'));
     state.deferred.clear();
+    state.targets.clear();
+    state.complete = true;
+  };
+  const forget = (key: string, state: MessageState, reason: 'idle' | 'capacity') => {
+    release(state, reason);
+    finish(state);
+    messages.delete(key);
+    diagnostics.forgottenMessages++;
   };
   const observe = ({ sessionId, cwd, workspacePath, event }: NativeObservation) => {
     if (disposed) return;
@@ -175,8 +204,8 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
     const owner = event.agentId ?? event.parentToolCallId
       ?? (typeof data.agentId === 'string' ? data.agentId : typeof data.parentToolCallId === 'string' ? data.parentToolCallId : '');
     if (event.type === 'abort' || event.type === 'assistant.turn_end') {
-      for (const [key, state] of messages) if (state.sessionId === sessionId && state.owner === owner) {
-        finish(state); messages.delete(key);
+      for (const state of messages.values()) if (state.sessionId === sessionId && state.owner === owner) {
+        finish(state);
       }
       return;
     }
@@ -184,15 +213,31 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
     if (!messageId) return;
     const key = keyOf(sessionId, messageId);
     let state = messages.get(key);
+    if (state && state.owner !== owner) return;
     const streaming = event.type === 'assistant.message_start' || event.type === 'assistant.message_delta';
+    const final = event.type === 'assistant.message' && typeof data.content === 'string';
+    if ((!streaming || event.ephemeral !== true) && !final) return;
+    if (state && Date.now() - state.touched > observationTtl) {
+      forget(key, state, 'idle');
+      state = undefined;
+    }
     if (!state && streaming && event.ephemeral === true) {
-      if (messages.size >= maxActiveMessages) { report(new Error('Active file scanner limit reached')); return; }
-      state = { sessionId, messageId, cwd, workspacePath, owner, scanner: scanner(),
-        hash: createHash('sha256'), length: 0, targets: new Set(), deferred: new Map(), touched: Date.now(), diagnosticsSeen: 0 };
+      if (messages.size >= maxObservedMessages) {
+        const oldest = messages.entries().next().value!;
+        forget(...oldest, 'capacity');
+      }
+      state = { sessionId, messageId, cwd, workspacePath, owner, complete: false,
+        targets: new Set(), deferred: new Map(), touched: Date.now() };
+      // A delta alone proves live observation, but not a safe Markdown prefix.
+      if (event.type === 'assistant.message_start') {
+        if (active.size >= maxActiveMessages) release(active.values().next().value!, 'capacity');
+        state.stream = { scanner: scanner(), hash: createHash('sha256'), length: 0, diagnosticsSeen: 0 };
+        active.set(key, state);
+      }
       messages.set(key, state);
     }
-    // A complete event without a new stream is not evidence of a new message.
-    if (!state) return;
+    // A complete event without a retained live observation is not new-message evidence.
+    if (!state || state.complete || state.owner !== owner) return;
     state.cwd = cwd;
     if (workspacePath !== undefined) {
       state.workspacePath = workspacePath;
@@ -202,33 +247,37 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
       }
     }
     state.touched = Date.now();
-    if (event.type === 'assistant.message_delta' && typeof data.deltaContent === 'string') {
-      state.hash.update(data.deltaContent);
-      state.length += data.deltaContent.length;
-      capture(state, state.scanner.feed(data.deltaContent));
-    } else if (event.type === 'assistant.message' && typeof data.content === 'string') {
-      const prefix = data.content.slice(0, state.length);
-      const samePrefix = prefix.length === state.length
-        && createHash('sha256').update(prefix).digest('hex') === state.hash.copy().digest('hex');
-      if (samePrefix) capture(state, state.scanner.feed(data.content.slice(state.length)));
+    const stream = state.stream;
+    if (stream) { active.delete(key); active.set(key, state); }
+    if (event.type === 'assistant.message_delta' && typeof data.deltaContent === 'string' && stream) {
+      stream.hash.update(data.deltaContent);
+      stream.length += data.deltaContent.length;
+      capture(state, stream.scanner.feed(data.deltaContent));
+    } else if (final && typeof data.content === 'string') {
+      const prefix = stream ? data.content.slice(0, stream.length) : undefined;
+      const samePrefix = stream && prefix?.length === stream.length
+        && createHash('sha256').update(prefix).digest('hex') === stream.hash.copy().digest('hex');
+      if (samePrefix) capture(state, stream.scanner.feed(data.content.slice(stream.length)));
       else {
+        if (!stream) diagnostics.lateFinals++;
         const correction = scanner();
         capture(state, correction.feed(data.content));
         for (const diagnostic of correction.diagnostics) report(new Error(diagnostic.message));
         correction.finish();
       }
       finish(state);
-      messages.delete(key);
     }
-    const diagnostics = state.scanner.diagnostics;
-    for (const diagnostic of diagnostics.slice(state.diagnosticsSeen)) report(new Error(diagnostic.message));
-    state.diagnosticsSeen = diagnostics.length;
+    if (stream) {
+      const notices = stream.scanner.diagnostics;
+      for (const diagnostic of notices.slice(stream.diagnosticsSeen)) report(new Error(diagnostic.message));
+      stream.diagnosticsSeen = notices.length;
+    }
   };
   const expire = setInterval(() => {
     const cutoff = Date.now() - 5 * 60_000;
-    for (const [key, state] of messages) if (state.touched < cutoff) {
-      finish(state); messages.delete(key);
-      report(new Error('Inactive file scanner released without historical catch-up'));
+    for (const [key, state] of messages) {
+      if (Date.now() - state.touched > observationTtl) forget(key, state, 'idle');
+      else if (state.touched < cutoff) release(state, 'idle');
     }
   }, 60_000);
   expire.unref();
@@ -303,6 +352,12 @@ export const activate: ActivateBackend = async (context: ModuleBackendContext) =
     },
     dispose,
     routes: [
+      { method: 'GET', path: '/state', handler: () => ({
+        headers: { 'Cache-Control': 'no-store' },
+        body: { scannerDiagnostics: {
+          ...diagnostics, active: active.size, observed: messages.size, maxObservedMessages,
+        } },
+      }) },
       { method: 'POST', path: '/messages/*', body: 'json', bodyLimit: 1024,
         handler: async request => {
           let captureKey: string | undefined;

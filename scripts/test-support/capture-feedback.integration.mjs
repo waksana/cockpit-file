@@ -56,6 +56,9 @@ test('missing capture sources stay local across real host bootstraps and histori
   assert.equal(initial.active.length, 1);
   assert.equal(initial.active[0].digest, installed.digest);
   const apiBase = initial.modules[0].apiBase;
+  const initialState = await app.inject(`${apiBase}/state`);
+  assert.equal(initialState.headers['cache-control'], 'no-store');
+  assert.equal(initialState.json().scannerDiagnostics.observed, 0);
   const sessionId = '11111111-1111-4111-8111-111111111111';
   let serial = 0;
   const emit = async (type, messageId, data = {}) => {
@@ -82,6 +85,10 @@ test('missing capture sources stay local across real host bootstraps and histori
   };
   const missingUrl = messageUrl('missing', './missing.txt');
   await emit('assistant.message_start', 'missing');
+  const liveState = (await app.inject(`${apiBase}/state`)).json();
+  assert.equal(liveState.scannerDiagnostics.observed, 1);
+  assert.equal(liveState.scannerDiagnostics.active, 1);
+  assert.ok(Object.values(liveState.scannerDiagnostics).every(value => typeof value === 'number'));
   await emit('assistant.message_delta', 'missing', { deltaContent: '[missing](./missing.txt)' });
   assert.equal((await settledHead(missingUrl)).statusCode, 422);
   assert.equal((await app.inject(missingUrl)).json().code, 'SOURCE_NOT_FOUND');
@@ -121,4 +128,8 @@ test('missing capture sources stay local across real host bootstraps and histori
   const failedHead = await app.inject({ method: 'HEAD', url: missingUrl });
   assert.equal(failedHead.headers['x-file-state'], 'failed');
   assert.equal(failedHead.headers['x-file-error-code'], 'SOURCE_NOT_FOUND');
+  await emit('assistant.message_delta', 'late-final', { deltaContent: 'A partial message' });
+  await emit('assistant.message', 'late-final', { content: 'A complete message with no references' });
+  assert.equal((await app.inject(`${apiBase}/state`)).json().scannerDiagnostics.lateFinals, 1);
+  assert.deepEqual((await app.inject('/_modules')).json().errors, []);
 });

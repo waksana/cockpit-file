@@ -129,6 +129,49 @@ feed(delta)
 成功快照的定义为首次成功捕获的字节，而不是整条最终回复发出瞬间的字节。
 临时引用后来消失、delta 中断和未捕获的旧文件版本都属于 best-effort 限制。
 
+### Idle release and late complete events
+
+The one-minute sweep releases incremental parser state after five minutes without
+an accepted event for that message. This is a memory policy, not evidence that the
+native session is idle, stopped or broken. Routine release does not report a
+module-wide runtime error and never deletes captured files.
+
+Live observation records are separate from parser state. At most
+`4 * maxActiveMessages` records retain message/owner identity, native path context
+and bounded reference deduplication/deferred context, never the message body.
+They expire after 30 minutes without an accepted message event (checked on ingress
+and by the sweep); capacity pressure forgets the oldest inserted record. Active
+parsers remain capped at `maxActiveMessages`, releasing the least recently used
+parser when a new message starts. Released parsers are never reconstructed from
+middle deltas. A first observed delta without a start likewise waits for the full
+body, because its missing prefix could contain a code fence or other suppression.
+
+While its observation record remains eligible, a matching owner's complete event
+can parse the full body once. Existing target deduplication and immutable storage
+identities prevent replacing earlier snapshots. Deferred references keep their
+reference-time working directory until native workspace context becomes known.
+Capture still saves bytes available at capture time, not a reconstruction of bytes
+at the original message time. No history is read. Unknown/expired complete events
+cannot initiate capture; explicit synchronization remains a separate user action.
+
+Completion, matching-owner turn end/abort and session shutdown close eligibility;
+module stop closes all records and drains existing work. Completed records act as
+bounded tombstones against repeated finals or starts until forgotten. Parent/root
+events do not close a different subagent owner's record.
+
+The read-only module `GET /state` route exposes aggregate bodyless
+`scannerDiagnostics` counters and current active/observed counts, with `no-store`.
+It uses the existing module route contract, not activation-time `publicConfig`
+(which the host snapshots). `idleReleased` and
+`capacityReleased` count parser releases; `releasedWithCandidate` and
+`releasedWithDeferred` distinguish potential unfinished work from plain prose.
+`forgottenMessages` counts retention expiry/capacity removal, and `lateFinals`
+counts accepted full-body recoveries without a parser (including delta-only
+observations). These are not file-loss counts. They contain no message text,
+paths or session/message IDs and do not publish per-token events. Unresolved
+workspace context at terminal closure and real capture/storage failures retain
+their explicit error reporting.
+
 ## 4. loading 如何转为 ready
 
 只给 `<img src="...">` 返回一次错误并不够：

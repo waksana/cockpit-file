@@ -1,5 +1,9 @@
 # Cockpit File 0.0.0-dev
 
+- Release idle parsers without module-wide errors, retaining bounded live-message
+  evidence for late complete events. Never scan contextless middle deltas or
+  backfill unknown historical messages. Preserve saved snapshots and expose
+  bodyless aggregate scanner diagnostics through the read-only module state route.
 - Add an adjacent reload control to failed local Markdown file references.
   Explicit synchronization verifies the exact native message/reference through
   bounded public persisted history and saves current source bytes, never replacing

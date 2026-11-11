@@ -153,6 +153,162 @@ test('historical completions and resource reads cannot import a local file', asy
   assert.equal((await f.request('HEAD', '/messages/*', { params: { '*': 'invalid!' } })).status, 400);
 });
 
+function scannerClock(t: TestContext) {
+  const now = Date.now.bind(Date);
+  let offset = 0;
+  t.mock.method(Date, 'now', () => now() + offset);
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  return (minutes: number) => {
+    offset += minutes * 60_000;
+    t.mock.timers.tick(minutes * 60_000);
+  };
+}
+
+async function scannerDiagnostics(f: Awaited<ReturnType<typeof fixture>>) {
+  const response = await f.request('GET', '/state');
+  assert.equal(response.headers?.['Cache-Control'], 'no-store');
+  return (response.body as { scannerDiagnostics: Record<string, number> }).scannerDiagnostics;
+}
+
+test('idle scanners release quietly, retain bounded observations and reject expired historical finals', async t => {
+  const advance = scannerClock(t);
+  const f = await fixture(t);
+  await f.event('assistant.message_start', 'plain');
+  await f.event('assistant.message_delta', 'plain', { deltaContent: 'No file references.' });
+  advance(6);
+  assert.deepEqual(await scannerDiagnostics(f), {
+    idleReleased: 1, capacityReleased: 0, releasedWithCandidate: 0,
+    releasedWithDeferred: 0, forgottenMessages: 0, lateFinals: 0,
+    active: 0, observed: 1, maxObservedMessages: 128,
+  });
+  assert.deepEqual(f.errors, []);
+  await writeFile(join(f.cwd, 'old.txt'), 'current bytes are not historical bytes');
+  advance(25);
+  await f.event('assistant.message', 'plain', { content: '[old](./old.txt)' });
+  assert.equal((await f.messageHead('plain', './old.txt')).status, 404);
+  assert.equal((await scannerDiagnostics(f)).observed, 0);
+  assert.deepEqual(f.errors, []);
+});
+
+test('late finals recover unfinished candidates once without scanning a contextless middle delta', async t => {
+  const advance = scannerClock(t);
+  const f = await fixture(t);
+  await writeFile(join(f.cwd, 'result.txt'), 'first bytes');
+  await writeFile(join(f.cwd, 'code.txt'), 'must not capture');
+  await f.event('assistant.message_start', 'late');
+  await f.event('assistant.message_delta', 'late', { deltaContent: '[result](./res' });
+  advance(6);
+  assert.equal((await scannerDiagnostics(f)).releasedWithCandidate, 1);
+  await f.event('assistant.message_delta', 'late', { deltaContent: '[code](./code.txt)' });
+  assert.equal((await f.messageHead('late', './code.txt')).status, 404);
+  const content = '[result](./result.txt)\n```\n[code](./code.txt)\n```';
+  await f.event('assistant.message', 'late', { content });
+  await f.ready(() => f.messageHead('late', './result.txt'));
+  await writeFile(join(f.cwd, 'result.txt'), 'changed bytes');
+  await f.event('assistant.message', 'late', { content: `${content}\n[new](./code.txt)` });
+  await f.event('assistant.message_start', 'late');
+  await f.event('assistant.message_delta', 'late', { deltaContent: '[new](./code.txt)' });
+  assert.equal((await f.messageHead('late', './code.txt')).status, 404);
+  const response = await f.request('GET', '/messages/*', { params: { '*': f.ref('late', './result.txt') } });
+  assert.ok(response.body instanceof Readable);
+  assert.equal(Buffer.concat(await response.body.toArray()).toString(), 'first bytes');
+  assert.equal((await scannerDiagnostics(f)).lateFinals, 1);
+  assert.deepEqual(f.errors, []);
+});
+
+test('idle release preserves snapshots and deferred reference-time context until a late final', async t => {
+  const advance = scannerClock(t);
+  const f = await fixture(t);
+  await mkdir(join(f.cwd, 'files'));
+  await writeFile(join(f.cwd, 'saved.txt'), 'saved before release');
+  await writeFile(join(f.cwd, 'files', 'deferred.txt'), 'original project');
+  await f.event('assistant.message_start', 'deferred', {}, f.cwd, {});
+  const content = '[saved](./saved.txt)\n[deferred](files/deferred.txt)';
+  await f.event('assistant.message_delta', 'deferred', { deltaContent: content }, f.cwd, {});
+  await f.ready(() => f.messageHead('deferred', './saved.txt'));
+  await rm(join(f.cwd, 'saved.txt'));
+  advance(6);
+  assert.equal((await scannerDiagnostics(f)).releasedWithDeferred, 1);
+  assert.deepEqual(f.errors, []);
+  const moved = join(f.root, 'moved');
+  await mkdir(moved);
+  await f.event('assistant.message', 'deferred', { content }, moved);
+  await f.ready(() => f.messageHead('deferred', 'files/deferred.txt'));
+  const response = await f.request('GET', '/messages/*', { params: { '*': f.ref('deferred', './saved.txt') } });
+  assert.ok(response.body instanceof Readable);
+  assert.equal(Buffer.concat(await response.body.toArray()).toString(), 'saved before release');
+  assert.deepEqual(f.errors, []);
+});
+
+test('capacity eviction keeps bounded late-final eligibility and never resumes lost parser context', async t => {
+  const f = await fixture(t, { maxActiveMessages: 1 });
+  await writeFile(join(f.cwd, 'result.txt'), 'result');
+  await writeFile(join(f.cwd, 'code.txt'), 'not a reference');
+  await f.event('assistant.message_start', 'evicted');
+  await f.event('assistant.message_delta', 'evicted', { deltaContent: '```\n' });
+  await f.event('assistant.message_start', 'second');
+  await f.event('assistant.message_delta', 'evicted', { deltaContent: '[code](./code.txt)' });
+  assert.equal((await f.messageHead('evicted', './code.txt')).status, 404);
+  await f.event('assistant.message', 'evicted', {
+    content: '```\n[code](./code.txt)\n```\n[result](./result.txt)',
+  });
+  await f.ready(() => f.messageHead('evicted', './result.txt'));
+  assert.equal((await f.messageHead('evicted', './code.txt')).status, 404);
+  assert.equal((await scannerDiagnostics(f)).capacityReleased, 1);
+  for (const id of ['third', 'fourth', 'fifth', 'sixth']) await f.event('assistant.message_start', id);
+  assert.equal((await scannerDiagnostics(f)).observed, 4);
+  assert.equal((await scannerDiagnostics(f)).active, 1);
+  await f.event('assistant.message', 'second', { content: '[old](./result.txt)' });
+  assert.equal((await f.messageHead('second', './result.txt')).status, 404);
+  await f.ready(() => f.messageHead('evicted', './result.txt'));
+  assert.deepEqual(f.errors, []);
+});
+
+test('a first observed delta waits for the full body rather than interpreting a missing code prefix', async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.cwd, 'code.txt'), 'code');
+  await writeFile(join(f.cwd, 'result.txt'), 'result');
+  await f.event('assistant.message_delta', 'delta-only', { deltaContent: '[code](./code.txt)' });
+  assert.equal((await f.messageHead('delta-only', './code.txt')).status, 404);
+  await f.event('assistant.message', 'delta-only', {
+    content: '```\n[code](./code.txt)\n```\n[result](./result.txt)',
+  });
+  await f.ready(() => f.messageHead('delta-only', './result.txt'));
+  assert.equal((await f.messageHead('delta-only', './code.txt')).status, 404);
+  assert.deepEqual(f.errors, []);
+});
+
+test('owner boundaries, terminal events and stop fence late final recovery', async t => {
+  const advance = scannerClock(t);
+  const f = await fixture(t);
+  await writeFile(join(f.cwd, 'result.txt'), 'result');
+  const content = '[result](./result.txt)';
+  await f.event('assistant.message_start', 'child', { agentId: 'child-owner' });
+  await f.event('assistant.message_start', 'root');
+  advance(6);
+  await f.event('assistant.message', 'child', { content, agentId: 'other-owner' });
+  await f.event('assistant.message_delta', 'child', { deltaContent: content });
+  assert.equal((await f.messageHead('child', './result.txt')).status, 404);
+  await f.event('assistant.turn_end', '');
+  await f.event('assistant.message', 'root', { content });
+  assert.equal((await f.messageHead('root', './result.txt')).status, 404);
+  await f.event('assistant.message', 'child', { content, agentId: 'child-owner' });
+  await f.ready(() => f.messageHead('child', './result.txt'));
+  for (const type of ['abort', 'session.shutdown']) {
+    await f.event('assistant.message_start', type);
+    await f.event(type, '');
+    await f.event('assistant.message', type, { content });
+    assert.equal((await f.messageHead(type, './result.txt')).status, 404);
+  }
+  await f.event('assistant.message_start', 'stopping');
+  advance(6);
+  await f.module.onStop?.();
+  await f.event('assistant.message', 'stopping', { content });
+  assert.equal((await scannerDiagnostics(f)).observed, 0);
+  assert.equal((await scannerDiagnostics(f)).lateFinals, 1);
+  assert.deepEqual(f.errors, []);
+});
+
 test('missing sources remain explicit reference failures without global errors, recapture or record migration', async t => {
   const f = await fixture(t);
   await writeFile(join(f.cwd, 'not-a-directory'), 'ordinary file');

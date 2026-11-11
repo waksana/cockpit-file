@@ -26,6 +26,7 @@ export interface MarkdownScanner {
   finish(): MarkdownReference[];
   readonly stats: Readonly<ScannerStats>;
   readonly diagnostics: readonly ScannerDiagnostic[];
+  readonly pendingCandidate: boolean;
 }
 
 type Phase = 'label' | 'open' | 'leading' | 'bare' | 'angle' | 'after' | 'title' | 'trailing';
@@ -348,5 +349,6 @@ export function createMarkdownScanner(options: MarkdownScannerOptions = {}): Mar
     },
     get stats() { return { ...stats }; },
     get diagnostics() { return diagnostics.slice(); },
+    get pendingCandidate() { return candidate !== undefined; },
   };
 }
