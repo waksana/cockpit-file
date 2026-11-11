@@ -32,6 +32,10 @@ this source preparation is not a release or deployment.
 
 ## 呈现基线
 
+Managed Markdown and static HTML extend the existing dialog with an isolated
+document frame and an open-in-new-tab action. Supported formats, limits, links
+and security boundaries are defined in [document previews](document-preview.md).
+
 **The bundle exports `frontendApiVersion = 3` and requires Web API v3,
 publicComponents v1, draftOwner v1 and draftSubmission v2. UI/shared-surfaces v1
 and package/backend API v1 remain unchanged.**

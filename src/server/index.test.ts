@@ -82,6 +82,46 @@ test('module upload returns the native attachment and supports HEAD, exact downl
     query: { name: 'report.txt', operationId: 'upload-1' },
     body: Readable.from([Buffer.from('abcdef')]), headers: { 'x-file-mime': 'image/png' },
   });
+
+  test('managed and message documents preview separately from immutable downloads without source recapture', async t => {
+    const f = await fixture(t);
+    for (const [name, text, marker] of [
+      ['notes.md', '# Heading\n\n**Bold**', '<h1>Heading</h1>'],
+      ['page.html', '<style>p{color:red}</style><p>Static</p><script>alert(1)</script>', '<p>Static</p>'],
+    ]) {
+      const uploaded = await f.request('POST', '/upload', {
+        query: { name: name!, operationId: name! }, body: Readable.from([Buffer.from(text!)]),
+      });
+      const { fileId } = uploaded.body as { fileId: string };
+      const params = { fileId, body: `body.${name!.split('.').at(-1)}` };
+      const head = await f.request('HEAD', '/files/:fileId/:body', { params });
+      assert.equal(head.headers?.['X-File-Preview'], name === 'notes.md' ? 'markdown' : 'html');
+      assert.equal(head.headers?.['Content-Type'], 'application/octet-stream');
+      assert.match(head.headers?.['Content-Disposition'] ?? '', /^attachment;/);
+      const preview = await f.request('GET', '/files/:fileId/:body', { params, query: { preview: '1' }, headers: { host: 'host.test', range: 'bytes=0-1' } });
+      assert.equal(preview.headers?.['Content-Type'], 'text/html; charset=utf-8');
+      assert.equal(preview.headers?.['Content-Disposition'], 'inline');
+      assert.equal(preview.headers?.['Cache-Control'], 'no-store');
+      assert.match(preview.headers?.['Content-Security-Policy'] ?? '', /^sandbox /);
+      assert.ok(String(preview.body).includes(marker!));
+      assert.doesNotMatch(String(preview.body), /<script/);
+      assert.equal(preview.headers?.['Content-Length'], String(Buffer.byteLength(String(preview.body))));
+      const original = await f.request('GET', '/files/:fileId/:body', { params, query: { preview: '1', download: '1' } });
+      assert.ok(original.body instanceof Readable);
+      assert.equal(Buffer.concat(await original.body.toArray()).toString(), text);
+    }
+    const path = join(f.cwd, 'source.md');
+    await writeFile(path, '# Original snapshot');
+    await f.event('assistant.message_start', 'doc');
+    await f.event('assistant.message_delta', 'doc', { deltaContent: '[Doc](./source.md)' });
+    await f.ready(() => f.messageHead('doc', './source.md'));
+    await writeFile(path, '# Changed source');
+    const preview = await f.request('GET', '/messages/*', { params: { '*': f.ref('doc', './source.md') },
+      query: { preview: '1' }, headers: { host: 'host.test' } });
+    assert.match(String(preview.body), /<h1>Original snapshot<\/h1>/);
+    assert.doesNotMatch(String(preview.body), /Changed source/);
+    assert.equal((await f.request('GET', '/messages/*', { params: { '*': f.ref('doc', './missing.html') }, query: { preview: '1' } })).status, 404);
+  });
   const body = uploaded.body as { fileId: string; url: string; attachment: { type: string; path: string }; mime: string };
   assert.equal(body.attachment.type, 'file');
   assert.ok(body.attachment.path.startsWith(String(f.module.publicConfig?.nativePathPrefix)));

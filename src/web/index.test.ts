@@ -20,6 +20,7 @@ const compiled = ts.transpileModule(source, {
   .replaceAll("'./file-draft.ts'", JSON.stringify(new URL('./file-draft.ts', import.meta.url).href))
   .replaceAll("'./file-input.ts'", JSON.stringify(new URL('./file-input.ts', import.meta.url).href))
   .replaceAll("'./file-services.ts'", JSON.stringify(new URL('./file-services.ts', import.meta.url).href))
+  .replaceAll("'./document.ts'", JSON.stringify(new URL('./document.ts', import.meta.url).href))
   .replaceAll("'./icons.ts'", JSON.stringify(new URL('./icons.ts', import.meta.url).href))
   .replaceAll("'./blob.ts'", JSON.stringify(new URL('./blob.ts', import.meta.url).href));
 const { activate: activateModule } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`) as { activate: ActivateFrontend };
@@ -1411,6 +1412,48 @@ test('Markdown SVG references fetch metadata only until opened and preview witho
   assert.doesNotMatch(source, /dangerouslySetInnerHTML|innerHTML\s*=/);
   h.unmount();
   frontend.dispose?.();
+});
+
+test('document cards fetch only when opened, isolate the rendered HTML and retain both open and download actions', async () => {
+  for (const kind of ['markdown', 'html']) {
+    const h = harness();
+    h.context.request = async (path, init) => {
+      h.calls.push({ path, init });
+      return init?.method === 'HEAD'
+        ? new Response(null, { headers: { 'content-type': 'application/octet-stream', 'content-length': '100', 'x-file-preview': kind } })
+        : new Response('<h1>Rendered document</h1>', { headers: { 'content-type': 'text/html', 'x-file-preview': kind } });
+    };
+    const frontend = await activate(h.context);
+    const node: MarkdownNode = { kind: 'link', origin: { sessionId: 'fixture', messageId: kind },
+      target: `files/document.${kind === 'markdown' ? 'md' : 'html'}`, label: 'Document' };
+    const render = () => h.render(frontend.markdown![0]!.component, { node, fallback: 'fallback' });
+    render(); h.flushEffects(); await settle();
+    let tree = render();
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.calls[0]!.init?.method, 'HEAD');
+    const reference = descendants(tree).find(element => element.type === 'a')!;
+    assert.match(String(reference.props.href), /\?preview=1$/);
+    openFile(tree);
+    render(); h.flushEffects(); await settle();
+    tree = render();
+    const frame = descendants(tree).find(element => element.type === 'iframe')!;
+    assert.ok(frame);
+    assert.equal(frame.props.srcDoc, '<h1>Rendered document</h1>');
+    assert.equal(frame.props.sandbox, 'allow-popups allow-popups-to-escape-sandbox');
+    assert.equal(frame.props.referrerPolicy, 'no-referrer');
+    assert.equal(frame.props.src, undefined);
+    (frame.props.onLoad as () => void)();
+    tree = render();
+    const links = descendants(tree).filter(element => element.type === 'a');
+    assert.ok(links.some(element => String(element.props.href).endsWith('?download=1')));
+    const open = links.find(element => element.props.target === '_blank')!;
+    assert.match(String(open.props.href), /\?preview=1$/);
+    assert.equal(open.props.rel, 'noopener noreferrer');
+    assert.equal(h.calls.length, 2);
+    assert.match(h.calls[1]!.path, /\?preview=1$/);
+    h.unmount();
+    frontend.dispose?.();
+  }
 });
 
 test('module stop closes its body-mounted modal and a stale trigger cannot reopen it', async () => {

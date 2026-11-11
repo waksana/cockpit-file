@@ -1,6 +1,8 @@
 # Cockpit File 文档
 
 **Current source supports both native and generic owner drafts through one File enhancement chain.**
+Managed Markdown and static HTML files support isolated
+[single-file document previews](document-preview.md), including opening in a new tab.
 The module ships [default instructions](../src/instructions.md) asking agents to give files as Markdown links/images.
 Source versions stay `0.0.0-dev`; changed bytes never replace an existing installed identity.
 组件与浏览器离开保护见[前端接入契约](frontend-contract.md)。既有持久化草稿编码不变。
@@ -71,7 +73,7 @@ Agent 用原生工具生成文件，正常回复 Markdown
 | 渲染协议 | 原生消息和共享 URL 算法即可，不增加宿主展示资源图或卡片 SSE |
 | Lifecycle | Public shutdown v1 stops preparation and drains active work; normal processing persists every boundary |
 | 来源范围 | 按用户确认，允许捕获服务用户可读的本地普通文件；HTTP 读取不能据任意路径创建捕获 |
-| 大小与预览 | 默认单文件 100 MiB，可配置；图片及浏览器原生视频/音频，其他格式下载，不转码 |
+| Size and preview | Configurable 100 MiB file default; native image/audio/video plus [bounded Markdown/static HTML](document-preview.md); other formats download without transcoding |
 | 元数据 | 每文件 JSON 与原件原子提交，不使用数据库或内容去重对象池 |
 
 ## 3. 责任归属

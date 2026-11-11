@@ -1,9 +1,12 @@
 import { fromMarkdown } from 'mdast-util-from-markdown';
 import { gfmFromMarkdown } from 'mdast-util-gfm';
 import { gfm } from 'micromark-extension-gfm';
+export function parseMarkdown(content: string) {
+  return fromMarkdown(content, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] });
+}
 
 export function containsFileReference(content: string, reference: string): boolean {
-  const root = fromMarkdown(content, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] });
+  const root = parseMarkdown(content);
   const pending = [...root.children].reverse();
   const references: string[] = [];
   const definitions = new Map<string, string>();
